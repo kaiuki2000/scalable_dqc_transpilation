@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "additionalDirectories": [
+      "/home/azenhaao/Desktop/qiskit",
+      "/home/azenhaao/Desktop/pytket-dqc",
+      "/home/azenhaao/Desktop/mqpu-ustutt-ibm"
+      ],
+    "allow": [],
+    "deny": [
+      "Bash(rm -rf:*)",
+      "Bash(git push --force:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean:*)"
+    ]
+  }
+}
