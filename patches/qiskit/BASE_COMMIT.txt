@@ -1,0 +1,29 @@
+848178940d2def0dbdee578d20ce5e6b3451f4c2
+
+This is the upstream Qiskit commit "Prepare 2.2.0rc1 (#14986)", tagged
+2.2.0rc1 in Qiskit/qiskit. Note this is NOT the same commit as the final
+2.2.0 release tag (2155673bc325026f85dbc3fafe9b7b0207eb615b) -- the patch
+was developed against the release candidate and will not apply cleanly
+on top of the final 2.2.0 tag. This also matches the paper's own
+"Qiskit 2.2.0" experimental setup (Section VI-A1).
+
+The patch in this directory is generated as the diff between the above
+base commit and:
+
+  c62ce9982a7bf7764072ea89296077db4583b679
+  https://github.com/kaiuki2000/qiskit/tree/c62ce9982a7bf7764072ea89296077db4583b679
+
+That commit is on the fork's `exponential_decay` branch (which also
+contains later, post-paper work) and represents the code as it stood
+when this paper's results were produced. It implements the three
+DQC-aware SABRE variants described in Section IV of the paper --
+Default SABRE, (1,10) SABRE, and CLA-SABRE -- see MODIFICATIONS.md for
+how each maps to the code. Later commits on that branch continue
+development on the same cost function (e.g. an exponential-decay-weighted,
+depth-aware variant) but are not part of what's reproduced by this patch.
+
+To reproduce the base checkout:
+  git clone https://github.com/Qiskit/qiskit.git
+  cd qiskit
+  git checkout 848178940d2def0dbdee578d20ce5e6b3451f4c2
+  git apply /path/to/0001-dqc-aware-sabre-variants.patch

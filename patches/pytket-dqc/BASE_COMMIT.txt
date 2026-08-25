@@ -1,0 +1,19 @@
+bfa0b4eff5b77d0a9b3c260c7842e57e75091796
+
+This is the upstream pytket-dqc commit "ci(py-deps): update mypy
+requirement (#152)" in Quantinuum/pytket-dqc, which is also the tip of
+origin/main as of this writing -- a clean, undiverged pin.
+
+To reproduce the base checkout:
+  git clone https://github.com/Quantinuum/pytket-dqc.git
+  cd pytket-dqc
+  git checkout bfa0b4eff5b77d0a9b3c260c7842e57e75091796
+  git apply /path/to/0001-superconducting-topology-awareness.patch
+  cp /path/to/basic_usage_demo.ipynb examples/basic_usage.ipynb
+
+The demo notebook (basic_usage_demo.ipynb) is shipped as a full file
+rather than a diff: it is derived from examples/basic_usage.ipynb with
+one added demonstration cell (CoverEmbeddingSteinerDetached) and all
+cell outputs/execution counts stripped, since line-oriented diffs of
+notebook JSON (especially against base64-embedded outputs) are not
+reliably hand-applicable. Re-run the notebook to regenerate outputs.

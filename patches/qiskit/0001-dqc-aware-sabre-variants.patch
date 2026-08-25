@@ -1,0 +1,1049 @@
+diff --git a/crates/cext/src/transpiler/passes/sabre_layout.rs b/crates/cext/src/transpiler/passes/sabre_layout.rs
+index 16306dce3..66815ee16 100644
+--- a/crates/cext/src/transpiler/passes/sabre_layout.rs
++++ b/crates/cext/src/transpiler/passes/sabre_layout.rs
+@@ -102,12 +102,19 @@ pub extern "C" fn qk_sabre_layout_options_default() -> QkSabreLayoutOptions {
+ /// # Safety
+ ///
+ /// Behavior is undefined if ``circuit`` or ``target`` is not a valid, non-null pointer to a ``QkCircuit`` and ``QkTarget``.
++#[allow(improper_ctypes_definitions)]
+ #[no_mangle]
+ #[cfg(feature = "cbinding")]
+ pub unsafe extern "C" fn qk_transpiler_pass_standalone_sabre_layout(
+     circuit: *mut CircuitData,
+     target: *const Target,
+     options: *const QkSabreLayoutOptions,
++    penalized_swaps: Option<Vec<[PhysicalQubit; 2]>>,
++    qubit_qpu_map: Option<Vec<usize>>,
++    inter_qpu_distance_matrix: Option<Vec<Vec<f64>>>,
++    alpha: Option<f64>,
++    beta: Option<f64>,
++    custom_distance_matrix: Option<Vec<Vec<f64>>>,
+ ) -> *mut TranspileLayout {
+     // SAFETY: Per documentation, the pointer is non-null and aligned.
+     let circuit = unsafe { mut_ptr_as_ref(circuit) };
+@@ -139,6 +146,12 @@ pub unsafe extern "C" fn qk_transpiler_pass_standalone_sabre_layout(
+         Some(options.seed),
+         Vec::new(),
+         false,
++        penalized_swaps.clone(),
++        qubit_qpu_map.clone(),
++        inter_qpu_distance_matrix.clone(),
++        alpha.clone(),
++        beta.clone(),
++        custom_distance_matrix.clone(),
+     )
+     .unwrap_or_else(|_| panic!("Sabre layout failed."));
+     let out_circuit = dag_to_circuit(&result, false)
+diff --git a/crates/cext/src/transpiler/transpile_function.rs b/crates/cext/src/transpiler/transpile_function.rs
+index 5c84ad8fa..5f66aaba2 100644
+--- a/crates/cext/src/transpiler/transpile_function.rs
++++ b/crates/cext/src/transpiler/transpile_function.rs
+@@ -13,6 +13,8 @@ use std::ffi::c_char;
+ use std::ffi::CString;
+ 
+ use qiskit_circuit::circuit_data::CircuitData;
++#[cfg(feature = "cbinding")]
++use qiskit_circuit::PhysicalQubit;
+ use qiskit_transpiler::target::Target;
+ 
+ use qiskit_transpiler::transpile;
+@@ -111,6 +113,7 @@ pub extern "C" fn qk_transpiler_default_options() -> TranspileOptions {
+ /// pointers to a ``QkCircuit``, ``QkTarget``, or ``QkTranspileResult`` respectively.
+ /// ``options`` must be a valid pointer a to a ``QkTranspileOptions`` or ``NULL`.
+ /// ``error`` must be a valid pointer to a ``char`` pointer or ``NULL``.
++#[allow(improper_ctypes_definitions)]
+ #[no_mangle]
+ #[cfg(feature = "cbinding")]
+ pub unsafe extern "C" fn qk_transpile(
+@@ -119,6 +122,12 @@ pub unsafe extern "C" fn qk_transpile(
+     options: *const TranspileOptions,
+     result: *mut TranspileResult,
+     error: *mut *mut c_char,
++    penalized_swaps: Option<Vec<[PhysicalQubit; 2]>>,
++    qubit_qpu_map: Option<Vec<usize>>,
++    inter_qpu_distance_matrix: Option<Vec<Vec<f64>>>,
++    alpha: Option<f64>,
++    beta: Option<f64>,
++    custom_distance_matrix: Option<Vec<Vec<f64>>>
+ ) -> ExitCode {
+     // SAFETY: Per documentation, the pointer is non-null and aligned.
+     let qc = unsafe { const_ptr_as_ref(qc) };
+@@ -175,6 +184,12 @@ pub unsafe extern "C" fn qk_transpile(
+         options.optimization_level.into(),
+         approximation_degree,
+         seed,
++        penalized_swaps.clone(),
++        qubit_qpu_map.clone(),
++        inter_qpu_distance_matrix.clone(),
++        alpha.clone(),
++        beta.clone(),
++        custom_distance_matrix.clone()
+     ) {
+         Ok(transpile_result) => {
+             unsafe {
+diff --git a/crates/transpiler/src/passes/sabre/layer.rs b/crates/transpiler/src/passes/sabre/layer.rs
+index 328ca4341..89292fa3f 100644
+--- a/crates/transpiler/src/passes/sabre/layer.rs
++++ b/crates/transpiler/src/passes/sabre/layer.rs
+@@ -183,7 +183,7 @@ impl ExtendedSet {
+ 
+     /// Calculate the score of applying the given swap, relative to not applying it.
+     #[inline(always)]
+-    pub fn score(&self, swap: [PhysicalQubit; 2], dist: &ArrayView2<f64>) -> f64 {
++    pub fn score(&self, swap: [PhysicalQubit; 2], dist: &ArrayView2<f64> /*, dist_qpus: &ArrayView2<f64>*/ ) -> f64 {
+         let [a, b] = swap;
+         let mut total = 0.0;
+         for other in self.qubits[a.index()].iter() {
+@@ -203,6 +203,117 @@ impl ExtendedSet {
+         total
+     }
+ 
++    pub fn mqpu_lookahead_score(&self, swap: [PhysicalQubit; 2], qubit_qpu_map: &Vec<usize>, inter_qpu_distance_matrix: &Vec<Vec<f64>>, alpha: f64, beta: f64) -> f64 {
++        // If SWAP is inter-QPU, we want to check if said SWAP would make other 2-qubit gates
++        // in the ExtendedSet closer to "local" (i.e., on the same QPU). 
++
++        // Need a method to retrieve the QPU of a given PhysicalQubit. Defined where?
++        // Will have to pass information about which QPU each PhysicalQubit belongs to, somehow.
++        // qpu_a = QPU of qubit a
++        // qpu_b = QPU of qubit b
++        // qpu_other = QPU of qubit other
++
++        // Gate [a, other] becomes [b, other] after the swap.
++        // Check if dist_qpus[qpu_b, qpu_other] < dist_qpus[qpu_a, qpu_other] -> Swap should improve score. Else, worsen score (if not equal). [Equal distances mean no change in score from this inter-QPU term.]
++        // If dist[qpu_b, qpu_other] = 0.0, then the gate is now local! Add \alpha/3.0 to the score.
++        // Else add -\Delta * 1/\beta * \alpha/3. \beta is a hyperparameter to be tuned.
++        // Double-check that this logic makes sense. Verify with examples. Does dist=0.0 always mean local?
++
++        // I think this component should be an extra, i.e., we still have the regular
++        // distance-based score change, plus this QPU locality-based score change.
++
++        // TODO:
++        // 1. Implement functionality to get QPU of a PhysicalQubit. This information needs to be
++        //    passed into this function, somehow. Likely from the Python side, like I did for the
++        //    inter-QPU links. Done via the `qubit_qpu_map` parameter.
++        // 2. Pass in `dist_qpus` and hyperparameters \alpha and \beta. Done via the
++        //    `inter_qpu_distance_matrix` parameter. Hyperparameters are hardcoded for now
++        // 3. Implement the inter-QPU scoring logic described above. Done below.
++
++        // // Debug prints
++        // eprintln!("DEBUG: ExtendedSet::mqpu_lookahead_score called with swap [{:?}, {:?}]", swap[0], swap[1]);
++        // eprintln!("DEBUG: swap[0].index() = {}, swap[1].index() = {}", swap[0].index(), swap[1].index());
++        // eprintln!("DEBUG: qubit_qpu_map = {:?}", qubit_qpu_map);
++        // eprintln!("DEBUG: inter_qpu_distance_matrix = \n{:?}", inter_qpu_distance_matrix);
++        // eprintln!("DEBUG: alpha = {}, beta = {}", alpha,  beta); // Hyperparameters
++
++        // Main logic starts here.
++        let [a, b] = swap;
++        let mut total = 0.0;
++
++        let qpu_a = qubit_qpu_map[a.index()];
++        let qpu_b = qubit_qpu_map[b.index()];
++
++        // // Remove hardcoded hyperparameters; now passed as function parameters.
++        // let alpha = 9.0; // Hyperparameter to tune the reward/penalty scale.
++        // let beta = 3.0;  // Hyperparameter to tune the penalty scale.
++        //                       // Three gates that lead to an decrease of distance by 1.0
++        //                       // would lead to a reward of alpha/3.0, for example.
++
++        let dist_qpus = inter_qpu_distance_matrix; // Just renaming for clarity.
++
++        // // Debug prints: check if `self.qubits[a.index()]` and `self.qubits[b.index()]` are correct.
++        // eprintln!("DEBUG: In mqpu_lookahead_score:");
++        // eprintln!("DEBUG: self.qubits[{:?}] = {:?}", a, self.qubits[a.index()]);
++        // eprintln!("DEBUG: self.qubits[{:?}] = {:?}", b, self.qubits[b.index()]);
++
++        for other in self.qubits[a.index()].iter() {
++            // If the other qubit is also active then the score won't have changed, but since the
++            // distance is absolute, we'd double count rather than ignore if we didn't skip it.
++            if *other == b {
++                continue;
++            }
++            let qpu_other = qubit_qpu_map[other.index()];
++            // Original gate [a, other] is on QPUs [qpu_a, qpu_other]
++            // After swap, gate becomes [b, other] on QPUs [qpu_b, qpu_other]
++            let original_distance = dist_qpus[qpu_a][qpu_other];
++            let new_distance = dist_qpus[qpu_b][qpu_other];
++            let delta_distance = new_distance - original_distance;
++
++            // // Debug prints
++            // eprintln!("DEBUG: First branch of mqpu_lookahead_score");
++            // eprintln!("DEBUG: Considering gate [{:?}, {:?}] (QPU [{}, {:?}])", a, other, qpu_a, qpu_other);
++            // eprintln!("DEBUG: original_distance = {}, new_distance = {}, delta_distance = {}", original_distance, new_distance, delta_distance);
++            // eprintln!("DEBUG: dist_qpus = \n{:?}", dist_qpus);
++
++            // If the new distance is zero (while the original was non-zero), the gate is now local!
++            if new_distance == 0.0 && original_distance != 0.0 {
++                // Reward for making a gate local. Lowering the total "cost".
++                total -= alpha / 3.0; // Example value for \alpha/3.0
++            } else {
++                // Penalize/reward based on increase/decrease in distance.
++                total -= (-delta_distance * 1.0 / beta) * (alpha / 3.0); // Example values for 1/\beta and \alpha/3.
++            }
++        }
++        for other in self.qubits[b.index()].iter() {
++            if *other == a {
++                continue;
++            }
++            let qpu_other = qubit_qpu_map[other.index()];
++            // Original gate [b, other] is on QPUs [qpu_b, qpu_other]
++            // After swap, gate becomes [a, other] on QPUs [qpu_a, qpu_other]
++            let original_distance = dist_qpus[qpu_b][qpu_other];
++            let new_distance = dist_qpus[qpu_a][qpu_other];
++            let delta_distance = new_distance - original_distance;
++
++            // // Debug prints
++            // eprintln!("DEBUG: Second branch of mqpu_lookahead_score");
++            // eprintln!("DEBUG: Considering gate [{:?}, {:?}]", b, other);
++            // eprintln!("DEBUG: qpu_b = {}, qpu_a = {}, qpu_other = {}", qpu_b, qpu_a, qpu_other);
++            // eprintln!("DEBUG: original_distance = {}, new_distance = {}, delta_distance = {}", original_distance, new_distance, delta_distance);
++
++            // If the new distance is zero (while the original was non-zero), the gate is now local!
++            if new_distance == 0.0 && original_distance != 0.0 {
++                // Reward for making a gate local. Lowering the total "cost".
++                total -= alpha / 3.0; // Example value for \alpha/3.0
++            } else {
++                // Penalize/reward based on increase/decrease in distance.
++                total -= -delta_distance * 1.0 / beta * alpha / 3.0; // Example values for 1/\beta and \alpha/3.
++            }
++        }
++        total
++    }
++
+     /// Calculate the total absolute score of this set of nodes over the given layout.
+     pub fn total_score(&self, dist: &ArrayView2<f64>) -> f64 {
+         // Factor of two is to remove double-counting of each gate.
+@@ -229,6 +340,11 @@ impl ExtendedSet {
+         self.len
+     }
+ 
++    // /// Added: View onto the qubits in the extended set.
++    // pub fn qubits(&self) -> &Vec<Vec<PhysicalQubit>> {
++    //     &self.qubits
++    // }
++
+     pub fn is_empty(&self) -> bool {
+         self.len == 0
+     }
+diff --git a/crates/transpiler/src/passes/sabre/layout.rs b/crates/transpiler/src/passes/sabre/layout.rs
+index 055bbe581..242804456 100644
+--- a/crates/transpiler/src/passes/sabre/layout.rs
++++ b/crates/transpiler/src/passes/sabre/layout.rs
+@@ -38,7 +38,7 @@ use super::route::{swap_map, swap_map_trial, RoutingProblem, RoutingResult, Rout
+ 
+ #[allow(clippy::too_many_arguments)]
+ #[pyfunction]
+-#[pyo3(signature = (dag, target, heuristic, max_iterations, num_swap_trials, num_random_trials, seed=None, partial_layouts=vec![], skip_routing=false))]
++#[pyo3(signature = (dag, target, heuristic, max_iterations, num_swap_trials, num_random_trials, seed=None, partial_layouts=vec![], skip_routing=false, penalized_swaps=None, qubit_qpu_map=None, inter_qpu_distance_matrix=None, alpha=9.0, beta=3.0, custom_distance_matrix=None))]
+ pub fn sabre_layout_and_routing(
+     dag: &mut DAGCircuit,
+     target: &Target,
+@@ -49,7 +49,36 @@ pub fn sabre_layout_and_routing(
+     seed: Option<u64>,
+     partial_layouts: Vec<Vec<Option<PhysicalQubit>>>,
+     skip_routing: bool,
++    penalized_swaps: Option<Vec<[PhysicalQubit; 2]>>,
++    qubit_qpu_map: Option<Vec<usize>>,
++    inter_qpu_distance_matrix: Option<Vec<Vec<f64>>>,
++    alpha: Option<f64>,
++    beta: Option<f64>,
++    custom_distance_matrix: Option<Vec<Vec<f64>>>,
+ ) -> PyResult<(DAGCircuit, NLayout, NLayout)> {
++
++    let empty_penalty: Vec<[PhysicalQubit; 2]> = vec![]; // When no `penalized_swap`'s are provided.
++    let empty_qubit_qpu_map: Vec<usize> = vec![]; // When no `qubit_qpu_map` is provided.
++    let empty_inter_qpu_distance_matrix: Vec<Vec<f64>> = vec![]; // When no `inter_qpu_distance_matrix` is provided.
++    
++    // Redundant; The default values are already set in the function signature.
++    const DEFAULT_ALPHA: f64 = 9.0; // Default value for alpha hyperparameter.
++    const DEFAULT_BETA: f64 = 3.0;   // Default value for beta hyperparameter.
++
++    // --- PARSE CUSTOM DISTANCE MATRIX ONCE ---
++    let parsed_custom_matrix = custom_distance_matrix.and_then(|mat| {
++        let n = mat.len();
++        if n == 0 { return None; }
++        let mut arr = ndarray::Array2::<f64>::zeros((n, n));
++        for i in 0..n {
++            for j in 0..n {
++                arr[[i, j]] = mat[i][j];
++            }
++        }
++        Some(arr)
++    });
++    // -----------------------------------------
++
+     let Some(num_physical_qubits) = target.num_qubits else {
+         return Err(TranspilerError::new_err(
+             "given 'Target' was not initialized with a qubit count",
+@@ -137,7 +166,16 @@ pub fn sabre_layout_and_routing(
+                 }
+                 None => Neighbors::from_coupling(&coupling),
+             };
+-            let target = RoutingTarget::from_neighbors(neighbors);
++            let mut target = RoutingTarget::from_neighbors(neighbors);
++            
++            // --- INJECT CUSTOM DISTANCE MATRIX ---
++            if let Some(custom_mat) = &parsed_custom_matrix {
++                if target.num_qubits() == custom_mat.nrows() {
++                    target.distance = custom_mat.clone();
++                }
++            }
++            // -------------------------------------
++
+             let problem = RoutingProblem {
+                 target: &target,
+                 sabre: &sabre_full,
+@@ -145,7 +183,11 @@ pub fn sabre_layout_and_routing(
+                 heuristic,
+             };
+             starting_layouts.extend(partial_layouts);
+-            add_heuristic_layouts(&mut starting_layouts, problem, allow_parallel);
++            // Only add heuristics if we are actually doing random layout trials.
++            // If num_random_trials <= 1, strictly respect the partial_layouts!
++            if num_random_trials > 1 {
++                add_heuristic_layouts(&mut starting_layouts, problem, allow_parallel);
++            }
+             let num_layout_trials = starting_layouts.len();
+             let (_, result) = CondIterator::new(
+                 seeds(num_layout_trials),
+@@ -162,6 +204,11 @@ pub fn sabre_layout_and_routing(
+                         num_swap_trials,
+                         allow_parallel && num_swap_trials > 1,
+                         &starting_layouts[index],
++                        penalized_swaps.as_ref().unwrap_or(&empty_penalty),
++                        qubit_qpu_map.as_ref().unwrap_or(&empty_qubit_qpu_map),
++                        inter_qpu_distance_matrix.as_ref().unwrap_or(&empty_inter_qpu_distance_matrix),
++                        alpha.unwrap_or(DEFAULT_ALPHA),
++                        beta.unwrap_or(DEFAULT_BETA),
+                     ),
+                 )
+             })
+@@ -201,12 +248,20 @@ pub fn sabre_layout_and_routing(
+             let mut sub_from_full = vec![PhysicalQubit::new(u32::MAX); num_physical_qubits];
+             for component in &components {
+                 let sabre = SabreDAG::from_dag(&component.sub_dag)?;
+-                let target =
++                let mut target =
+                     RoutingTarget::from_neighbors(Neighbors::from_coupling_subset_with_map(
+                         &coupling,
+                         &component.physical_qubits,
+                         |q| NodeIndex::new(q.index()),
+                     ));
++                
++                // --- INJECT CUSTOM DISTANCE MATRIX ---
++                if let Some(custom_mat) = &parsed_custom_matrix {
++                    if target.num_qubits() == custom_mat.nrows() {
++                        target.distance = custom_mat.clone();
++                    }
++                }
++                // -------------------------------------
+                 let sub_problem = RoutingProblem {
+                     target: &target,
+                     sabre: &sabre,
+@@ -250,7 +305,10 @@ pub fn sabre_layout_and_routing(
+                         .collect::<PyResult<Vec<_>>>()?;
+                     starting_layouts.push(mapped_partial);
+                 }
+-                add_heuristic_layouts(&mut starting_layouts, sub_problem, allow_parallel);
++                if num_random_trials > 1 {
++                    add_heuristic_layouts(&mut starting_layouts, sub_problem, allow_parallel);
++                }
++                
+                 let num_layout_trials = starting_layouts.len();
+                 let (_, result) = CondIterator::new(
+                     seeds(num_layout_trials),
+@@ -267,6 +325,11 @@ pub fn sabre_layout_and_routing(
+                             num_swap_trials,
+                             allow_parallel && num_layout_trials == 1,
+                             &starting_layouts[index],
++                            penalized_swaps.as_ref().unwrap_or(&empty_penalty),
++                            qubit_qpu_map.as_ref().unwrap_or(&empty_qubit_qpu_map),
++                            inter_qpu_distance_matrix.as_ref().unwrap_or(&empty_inter_qpu_distance_matrix),
++                            alpha.unwrap_or(DEFAULT_ALPHA),
++                            beta.unwrap_or(DEFAULT_BETA),
+                         ),
+                     )
+                 })
+@@ -303,7 +366,16 @@ pub fn sabre_layout_and_routing(
+                 // ...and assign them to the unassigned physical qubits in increasing order of both.
+                 .zip(initial_physical.iter_mut().filter(|v| **v == max_virt))
+                 .for_each(|(v, slot)| *slot = v);
+-            let target = RoutingTarget::from_neighbors(Neighbors::from_coupling(&coupling));
++            let mut target = RoutingTarget::from_neighbors(Neighbors::from_coupling(&coupling));
++            
++            // --- INJECT CUSTOM DISTANCE MATRIX ---
++            if let Some(custom_mat) = &parsed_custom_matrix {
++                if target.num_qubits() == custom_mat.nrows() {
++                    target.distance = custom_mat.clone();
++                }
++            }
++            // -------------------------------------
++            
+             let problem = RoutingProblem {
+                 target: &target,
+                 sabre: &sabre_full,
+@@ -325,6 +397,11 @@ pub fn sabre_layout_and_routing(
+                     seed,
+                     num_swap_trials,
+                     Some(allow_parallel),
++                    penalized_swaps.as_ref().unwrap_or(&empty_penalty),
++                    qubit_qpu_map.as_ref().unwrap_or(&empty_qubit_qpu_map),
++                    inter_qpu_distance_matrix.as_ref().unwrap_or(&empty_inter_qpu_distance_matrix),
++                    alpha.unwrap_or(DEFAULT_ALPHA),
++                    beta.unwrap_or(DEFAULT_BETA),
+                 );
+                 Ok((
+                     result.rebuild()?,
+@@ -343,6 +420,11 @@ fn layout_trial<'a>(
+     num_swap_trials: usize,
+     run_swap_in_parallel: bool,
+     starting_layout: &'_ [Option<PhysicalQubit>],
++    penalized_swaps: &'a Vec<[PhysicalQubit; 2]>,
++    qubit_qpu_map: &'a Vec<usize>,
++    inter_qpu_distance_matrix: &'a Vec<Vec<f64>>,
++    alpha: f64,
++    beta: f64,
+ ) -> RoutingResult<'a> {
+     let num_physical_qubits: u32 = problem.target.neighbors.num_qubits().try_into().unwrap();
+     let mut rng = Pcg64Mcg::seed_from_u64(seed);
+@@ -385,7 +467,7 @@ fn layout_trial<'a>(
+     let initial_layout = (0..max_iterations)
+         .flat_map(|_| [&sabre_forwards, &sabre_backwards])
+         .fold(initial_layout, |initial, sabre| {
+-            swap_map_trial(problem.with_sabre(sabre), &initial, routing_seed).final_layout
++            swap_map_trial(problem.with_sabre(sabre), &initial, routing_seed, penalized_swaps, qubit_qpu_map, inter_qpu_distance_matrix, alpha, beta).final_layout
+         });
+     // Remap implicit ancillas to be assigned in numerical order.  This is pretty meaningless, but
+     // ensures we have exact RNG compatibility with previous versions of Sabre.
+@@ -405,6 +487,11 @@ fn layout_trial<'a>(
+         Some(seed),
+         num_swap_trials,
+         Some(run_swap_in_parallel),
++        penalized_swaps,
++        qubit_qpu_map,
++        inter_qpu_distance_matrix,
++        alpha,
++        beta,
+     )
+ }
+ 
+diff --git a/crates/transpiler/src/passes/sabre/route.rs b/crates/transpiler/src/passes/sabre/route.rs
+index b417625ae..73f492f72 100644
+--- a/crates/transpiler/src/passes/sabre/route.rs
++++ b/crates/transpiler/src/passes/sabre/route.rs
+@@ -343,6 +343,35 @@ impl PyRoutingTarget {
+     fn distance_matrix<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray2<f64>>> {
+         self.0.as_ref().map(|target| target.distance.to_pyarray(py))
+     }
++
++    // Distance matrix setter: (Testing.)
++    fn set_distance_matrix(&mut self, matrix: Vec<Vec<f64>>) -> PyResult<()> {
++        let n = matrix.len();
++        if n == 0 || matrix.iter().any(|row| row.len() != n) {
++            return Err(TranspilerError::new_err(
++                "Distance matrix must be non-empty and square",
++            ));
++        }
++        let flat: Vec<f64> = matrix.into_iter().flatten().collect();
++        let array = Array2::from_shape_vec((n, n), flat).map_err(|e| {
++            TranspilerError::new_err(format!("Failed to create distance matrix: {}", e))
++        })?;
++        if let Some(target) = &mut self.0 {
++            if target.num_qubits() != n {
++                return Err(TranspilerError::new_err(format!(
++                    "Distance matrix size {} does not match number of qubits {}",
++                    n,
++                    target.num_qubits()
++                )));
++            }
++            target.distance = array;
++            Ok(())
++        } else {
++            Err(TranspilerError::new_err(
++                "Cannot set distance matrix on all-to-all target",
++            ))
++        }
++    }
+ }
+ 
+ /// Helper record struct for a Sabre routing problem.
+@@ -389,6 +418,15 @@ struct RoutingState<'a> {
+     best_swaps: Vec<[PhysicalQubit; 2]>,
+     rng: Pcg64Mcg,
+     seed: u64,
++    /// NEW: list of swaps we want to penalize
++    penalized_swaps: &'a Vec<[PhysicalQubit; 2]>,  // or HashSet<[PhysicalQubit; 2]>
++    /// NEW: mapping of physical qubits to QPU indices. Used for *custom* ExtendedSet scoring.
++    qubit_qpu_map: &'a Vec<usize>,
++    /// NEW: inter-QPU distance matrix. Used for *custom* ExtendedSet scoring.
++    inter_qpu_distance_matrix: &'a Vec<Vec<f64>>,
++    /// NEW: \alpha and \beta parameters for *custom* ExtendedSet scoring.
++    alpha: f64,
++    beta: f64,
+ }
+ 
+ impl<'a> RoutingState<'a> {
+@@ -520,6 +558,11 @@ impl<'a> RoutingState<'a> {
+             },
+             layout,
+             self.seed,
++            self.penalized_swaps,
++            self.qubit_qpu_map,
++            self.inter_qpu_distance_matrix,
++            self.alpha,
++            self.beta,
+         );
+         // For now, we always append a swap circuit that gets the inner block back to the
+         // parent's layout.
+@@ -679,6 +722,20 @@ impl<'a> RoutingState<'a> {
+         let dist = &self.target.distance.view();
+         let mut absolute_score = 0.0;
+ 
++        // // Print distance matrix for debugging
++        // eprintln!("Distance matrix:\n{:?}", dist); // Reliable debug print
++
++        // // Print FrontLayer for debugging
++        // eprintln!("FrontLayer:\n{:?}", self.front_layer.qubits()); // reliable debug
++        // eprintln!("Number of gates in FrontLayer: {}", self.front_layer.len()); // reliable debug
++
++        // // Print ExtendedSet for debugging
++        // eprintln!("ExtendedSet:\n{:?}", self.extended_set.qubits()); // reliable debug
++        // eprintln!("Number of gates in ExtendedSet: {}", self.extended_set.len()); // reliable debug
++
++        // // Separator for clarity in debug output
++        // eprintln!("\n----------------------------------------\n"); // Reliable debug print
++
+         if let Some(BasicHeuristic { weight, scale }) = self.heuristic.basic {
+             let weight = match scale {
+                 SetScaling::Constant => weight,
+@@ -692,7 +749,33 @@ impl<'a> RoutingState<'a> {
+             };
+             absolute_score += weight * self.front_layer.total_score(dist);
+             for (swap, score) in self.swap_scores.iter_mut() {
+-                *score += weight * self.front_layer.score(*swap, dist);
++                let mut s = weight * self.front_layer.score(*swap, dist);
++                // Could, eventually, add a reliability score, as well.
++                // \alpha * (1 - R): Minimize. Check D. Ferrari et al.
++
++                // // Print SWAP being evaluated and respective score before penalty
++                // eprintln!("Evaluating swap: {:?} with preliminary score: {}", swap, s); // Reliable debug print
++
++                // Ensure canonical order, so [a, b] and [b, a] match consistently
++                let mut sorted_swap = *swap;
++                sorted_swap.sort(); // Redundant, as I already ensured order beforehand, but safe.
++                // "SWAPs" in `penalized_swaps` are already canonicalized, but the ones here may not be,
++                // hence the sort above.
++                
++                // Apply penalty factor if this swap is in the penalized set
++                if self.penalized_swaps.contains(&sorted_swap) {
++                    let penalty_factor = weight * self.alpha; // Example penalty factor. (0.0 means no penalty.) This is the same as the \alpha hyperparameter in `mqpu_lookahead_score` method.
++                    // eprintln!("[Basic] ... Applying penalty {} to swap: {:?}", penalty_factor, swap); // Reliable debug print
++                    // // `sorted_swap` ---> `swap`` for debug print
++
++                    // // Print score before and after penalty
++                    // eprintln!("Score before penalty: {}", s);
++                    s += penalty_factor; // test extreme factor to see effect
++                    // eprintln!("Score after penalty: {}", s);
++                }
++
++                *score += s;
++                // eprintln!("[Basic] ... Evaluating swap: {:?} with score: {}", swap, *score); // Reliable debug print
+             }
+         }
+ 
+@@ -703,13 +786,44 @@ impl<'a> RoutingState<'a> {
+                     if self.extended_set.is_empty() {
+                         0.0
+                     } else {
++                        // eprintln!("[Lookahead] Scaling = Size ({}); weight adjusted to {}", self.extended_set.len(), weight / (self.extended_set.len() as f64)); // Reliable debug print
+                         weight / (self.extended_set.len() as f64)
+                     }
+                 }
+             };
+             absolute_score += weight * self.extended_set.total_score(dist);
+             for (swap, score) in self.swap_scores.iter_mut() {
+-                *score += weight * self.extended_set.score(*swap, dist);
++                let mut s = weight * self.extended_set.score(*swap, dist); // Original lookahead score
++
++                // Ensure canonical order, so [a, b] and [b, a] match consistently
++                let mut sorted_swap = *swap;
++                sorted_swap.sort(); // Redundant, as I already ensured order beforehand, but safe.
++                                    // "SWAPs" in `penalized_swaps` are already canonicalized, but the ones here may not be,
++                                    // hence the sort above.
++
++                // Check if we are in "mQPU mode" or just "Sink Penalty mode"
++                let is_real_mqpu = !self.inter_qpu_distance_matrix.is_empty() && self.beta > 0.0;
++
++                // Apply penalty factor if this swap is in the penalized set, i.e., inter-QPU swap
++                if self.penalized_swaps.contains(&sorted_swap) {
++                    // eprintln!("[Lookahead \"penalty\"] ... &self.qubit_qpu_map: {:?}", self.qubit_qpu_map); // Reliable debug print
++                    // eprintln!("[Lookahead \"penalty\"] ... &self.inter_qpu_distance_matrix: {:?}", self.inter_qpu_distance_matrix); // Reliable debug print
++
++                    if is_real_mqpu {
++                        let mqpu_penalty_factor = self.extended_set.mqpu_lookahead_score(*swap, &self.qubit_qpu_map, &self.inter_qpu_distance_matrix, self.alpha, self.beta) // Custom penalty factor based on inter-QPU distances.
++                            * 1.0; // Scale by lookahead weight. Not yet!
++                        s += mqpu_penalty_factor; // test extreme factor to see effect
++                    } else {
++                        // Just apply the heavy alpha wall for virtual sinks
++                        s += weight * self.alpha;
++                    }
++                    
++                    // eprintln!("[Lookahead \"penalty\"] Applying penalty {} to swap: {:?}", mqpu_penalty_factor, swap); // Reliable debug print
++                    // // `sorted_swap` ---> `swap`` for debug print
++                }
++
++                *score += s;
++                // eprintln!("[Lookahead] Evaluating swap: {:?} with score ({} Added to Basic): {}", swap, s, *score); // Reliable debug print
+             }
+         }
+ 
+@@ -723,15 +837,19 @@ impl<'a> RoutingState<'a> {
+         let mut min_score = f64::INFINITY;
+         let epsilon = self.heuristic.best_epsilon;
+         for &(swap, score) in self.swap_scores.iter() {
+-            if score - min_score < -epsilon {
++            if score - min_score < -epsilon { // Explicitly better than previous best. Replace.
+                 min_score = score;
+                 self.best_swaps.clear();
+                 self.best_swaps.push(swap);
+-            } else if (score - min_score).abs() <= epsilon {
++            } else if (score - min_score).abs() <= epsilon { // If diff is 0, then that's also a best SWAP
+                 self.best_swaps.push(swap);
+             }
+         }
+-        *self.best_swaps.choose(&mut self.rng).unwrap()
++        let best_swap = *self.best_swaps.choose(&mut self.rng).unwrap(); // From the best swaps, pick one at random
++        // eprintln!("Chosen best swap: {:?} with score: {}\n", best_swap, min_score); // Reliable debug print
++        // // Print \n (new line) to separate from previous time-step logs
++        // eprintln!("");
++        best_swap
+     }
+ }
+ 
+@@ -741,7 +859,7 @@ impl<'a> RoutingState<'a> {
+ ///     A two-tuple of the newly routed :class:`.DAGCircuit`, and the layout that maps virtual
+ ///     qubits to their assigned physical qubits at the *end* of the circuit execution.
+ #[pyfunction]
+-#[pyo3(signature=(dag, target, heuristic, initial_layout, num_trials, seed=None, run_in_parallel=None))]
++#[pyo3(signature=(dag, target, heuristic, initial_layout, num_trials, seed=None, run_in_parallel=None, penalized_swaps=None, qubit_qpu_map=None, inter_qpu_distance_matrix=None, alpha=9.0, beta=3.0))]
+ pub fn sabre_routing(
+     dag: &DAGCircuit,
+     target: &PyRoutingTarget,
+@@ -750,12 +868,33 @@ pub fn sabre_routing(
+     num_trials: usize,
+     seed: Option<u64>,
+     run_in_parallel: Option<bool>,
++    penalized_swaps: Option<Vec<[PhysicalQubit; 2]>>, // `Option`: required to have the possibility of no penalization(s).
++    qubit_qpu_map: Option<Vec<usize>>,
++    inter_qpu_distance_matrix: Option<Vec<Vec<f64>>>,
++    alpha: Option<f64>,
++    beta: Option<f64>,
+ ) -> PyResult<(DAGCircuit, NLayout)> {
+     let Some(target) = target.0.as_ref() else {
+         // All-to-all coupling.
+         return Ok((dag.clone(), initial_layout.clone()));
+     };
+     let sabre = SabreDAG::from_dag(dag)?;
++
++    let empty_penalty: Vec<[PhysicalQubit; 2]> = vec![];
++    // Canonicalize penalized swaps to have smaller qubit first: Use `canonical_swap`. (If any.)
++    let penalized_swaps = penalized_swaps.map(|swaps| {
++        swaps.into_iter().map(canonical_swap).collect::<Vec<_>>()
++    });
++
++    // `qubit_qpu_map` and `inter_qpu_distance_matrix`: if not provided, create default values; empty `Vec`s.
++    let empty_qubit_qpu_map: Vec<usize> = vec![];
++    let empty_inter_qpu_distance_matrix: Vec<Vec<f64>> = vec![];
++
++    // `alpha` and `beta`: if not provided, use default values.
++    const DEFAULT_ALPHA: f64 = 9.0; // \alpha = 9.0;
++    const DEFAULT_BETA: f64 = 3.0;  // \beta = 3.0;
++                                    // Default value(s) used in `mqpu_lookahead_score` method.
++
+     let result = swap_map(
+         RoutingProblem {
+             target,
+@@ -767,6 +906,11 @@ pub fn sabre_routing(
+         seed,
+         num_trials,
+         run_in_parallel,
++        penalized_swaps.as_ref().unwrap_or(&empty_penalty),
++        qubit_qpu_map.as_ref().unwrap_or(&empty_qubit_qpu_map),
++        inter_qpu_distance_matrix.as_ref().unwrap_or(&empty_inter_qpu_distance_matrix),
++        alpha.unwrap_or(DEFAULT_ALPHA),
++        beta.unwrap_or(DEFAULT_BETA),
+     );
+     result.rebuild().map(|dag| (dag, result.final_layout))
+ }
+@@ -779,6 +923,11 @@ pub fn swap_map<'a>(
+     seed: Option<u64>,
+     num_trials: usize,
+     run_in_parallel: Option<bool>,
++    penalized_swaps: &'a Vec<[PhysicalQubit; 2]>,
++    qubit_qpu_map: &'a Vec<usize>,
++    inter_qpu_distance_matrix: &'a Vec<Vec<f64>>,
++    alpha: f64,
++    beta: f64,
+ ) -> RoutingResult<'a> {
+     let seeds = match seed {
+         Some(seed) => Pcg64Mcg::seed_from_u64(seed),
+@@ -793,7 +942,7 @@ pub fn swap_map<'a>(
+         num_trials > 1
+             && run_in_parallel.unwrap_or_else(|| getenv_use_multiple_threads() && num_trials > 1),
+     )
+-    .map(|seed| swap_map_trial(problem, initial_layout, seed))
++    .map(|seed| swap_map_trial(problem, initial_layout, seed, penalized_swaps, qubit_qpu_map, inter_qpu_distance_matrix, alpha, beta))
+     .enumerate()
+     .min_by_key(|(index, result)| (result.swap_count(), *index))
+     .map(|(_, result)| result)
+@@ -805,6 +954,11 @@ pub fn swap_map_trial<'a>(
+     problem: RoutingProblem<'a>,
+     initial_layout: &NLayout,
+     seed: u64,
++    penalized_swaps: &'a Vec<[PhysicalQubit; 2]>,
++    qubit_qpu_map: &'a Vec<usize>,
++    inter_qpu_distance_matrix: &'a Vec<Vec<f64>>,
++    alpha: f64,
++    beta: f64,
+ ) -> RoutingResult<'a> {
+     let RoutingProblem {
+         target,
+@@ -829,6 +983,11 @@ pub fn swap_map_trial<'a>(
+         best_swaps: Vec::new(),
+         rng: Pcg64Mcg::seed_from_u64(seed),
+         seed,
++        penalized_swaps,
++        qubit_qpu_map,
++        inter_qpu_distance_matrix,
++        alpha,
++        beta,
+     };
+     for node in state.sabre.dag.node_indices() {
+         for edge in state.sabre.dag.edges(node) {
+@@ -904,3 +1063,7 @@ pub fn swap_map_trial<'a>(
+         final_swaps: Vec::new(),
+     }
+ }
++
++pub fn canonical_swap([a, b]: [PhysicalQubit; 2]) -> [PhysicalQubit; 2] {
++    if a < b { [a, b] } else { [b, a] }
++}
+\ No newline at end of file
+diff --git a/crates/transpiler/src/transpiler.rs b/crates/transpiler/src/transpiler.rs
+index 101ab8b3c..fcc65f5f4 100644
+--- a/crates/transpiler/src/transpiler.rs
++++ b/crates/transpiler/src/transpiler.rs
+@@ -58,6 +58,12 @@ pub fn transpile(
+     optimization_level: OptimizationLevel,
+     approximation_degree: Option<f64>,
+     seed: Option<u64>,
++    penalized_swaps: Option<Vec<[PhysicalQubit; 2]>>,
++    qubit_qpu_map: Option<Vec<usize>>,
++    inter_qpu_distance_matrix: Option<Vec<Vec<f64>>>,
++    alpha: Option<f64>,
++    beta: Option<f64>,
++    custom_distance_matrix: Option<Vec<Vec<f64>>>,
+ ) -> Result<(CircuitData, TranspileLayout)> {
+     let mut dag = DAGCircuit::from_circuit_data(circuit, false, None, None, None, None)?;
+     let mut commutation_checker = get_standard_commutation_checker();
+@@ -173,6 +179,12 @@ pub fn transpile(
+                 seed,
+                 Vec::new(),
+                 false,
++                penalized_swaps.clone(),
++                qubit_qpu_map.clone(),
++                inter_qpu_distance_matrix.clone(),
++                alpha.clone(),
++                beta.clone(),
++                custom_distance_matrix.clone()
+             )?;
+             dag = result;
+             transpile_layout =
+@@ -199,6 +211,12 @@ pub fn transpile(
+                 seed,
+                 Vec::new(),
+                 false,
++                penalized_swaps.clone(),
++                qubit_qpu_map.clone(),
++                inter_qpu_distance_matrix.clone(),
++                alpha.clone(),
++                beta.clone(),
++                custom_distance_matrix.clone()
+             )?;
+             dag = result;
+             transpile_layout =
+@@ -230,6 +248,12 @@ pub fn transpile(
+             seed,
+             Vec::new(),
+             false,
++            penalized_swaps.clone(),
++            qubit_qpu_map.clone(),
++            inter_qpu_distance_matrix.clone(),
++            alpha.clone(),
++            beta.clone(),
++            custom_distance_matrix.clone()
+         )?;
+         dag = result;
+         transpile_layout =
+@@ -253,6 +277,12 @@ pub fn transpile(
+                 5,
+                 seed,
+                 Some(true),
++                penalized_swaps.clone(),
++                qubit_qpu_map.clone(),
++                inter_qpu_distance_matrix.clone(),
++                alpha.clone(),
++                beta.clone(),
++                // custom_distance_matrix.clone(),
+             )?;
+             dag = out_dag;
+             let routing_permutation =
+@@ -535,8 +565,13 @@ mod tests {
+         )
+         .unwrap();
+         for opt_level in 0..=3 {
+-            let result = match transpile(&qc, &target, opt_level.into(), Some(1.0), Some(42)) {
+-                Ok(res) => res,
++            let penalized_swaps = if opt_level == 0 {
++                Some(vec![[PhysicalQubit(0), PhysicalQubit(1)]])
++            } else {
++                None
++            };
++            let result = match transpile(&qc, &target, opt_level.into(), Some(1.0), Some(42), penalized_swaps, None, None, Some(9.0), Some(3.0), None) { // Not testing `qubit_qpu_map` and `inter_qpu_distance_matrix` here.
++                Ok(res) => res,                                                                                                                          // Using Some values for alpha and beta just to test the new parameters.    
+                 Err(e) => panic!("Error: {}", e.backtrace()),
+             };
+             for inst in result.0.data() {
+@@ -651,8 +686,13 @@ mod tests {
+         )
+         .unwrap();
+         for opt_level in 0..=3 {
+-            let result = match transpile(&qc, &target, opt_level.into(), Some(1.0), Some(42)) {
+-                Ok(res) => res,
++            let penalized_swaps = if opt_level == 0 {
++                Some(vec![[PhysicalQubit(0), PhysicalQubit(1)]])
++            } else {
++                None
++            };
++            let result = match transpile(&qc, &target, opt_level.into(), Some(1.0), Some(42), penalized_swaps, None, None, Some(9.0), Some(3.0), None) { // Not testing `qubit_qpu_map` and `inter_qpu_distance_matrix` here.
++                Ok(res) => res,                                                                                                                          // Using Some values for alpha and beta just to test the new parameters.
+                 Err(e) => panic!("Error: {}", e.backtrace()),
+             };
+             for inst in result.0.data() {
+diff --git a/qiskit/transpiler/passes/layout/sabre_layout.py b/qiskit/transpiler/passes/layout/sabre_layout.py
+index 7771578f4..983d0a258 100644
+--- a/qiskit/transpiler/passes/layout/sabre_layout.py
++++ b/qiskit/transpiler/passes/layout/sabre_layout.py
+@@ -32,6 +32,7 @@ from qiskit.transpiler.exceptions import TranspilerError
+ from qiskit.transpiler.target import Target, _FakeTarget
+ from qiskit._accelerate.sabre import sabre_layout_and_routing, Heuristic, SetScaling
+ from qiskit.utils import default_num_processes
++from networkx import DiGraph, set_edge_attributes, floyd_warshall_numpy
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -110,6 +111,13 @@ class SabreLayout(TransformationPass):
+         swap_trials=None,
+         layout_trials=None,
+         skip_routing=False,
++        penalized_swaps=None,
++        qubit_qpu_map=None,
++        inter_qpu_coupling_map=None,
++        alpha=9.0,
++        beta=3.0,
++        extended_set_length=20,
++        custom_distance_matrix=None,
+     ):
+         """SabreLayout initializer.
+ 
+@@ -148,7 +156,15 @@ class SabreLayout(TransformationPass):
+                 will be set in the property set. This is a tradeoff to run custom
+                 routing with multiple layout trials, as using this option will cause
+                 SabreLayout to run the routing stage internally but not use that result.
+-
++            penalized_swaps (List[Tuple[int, int]]): List of physical qubit pairs
++                for which SWAPs should be penalized during routing.
++            qubit_qpu_map (List[int]): List mapping each physical qubit index to a QPU index.
++            inter_qpu_coupling_map (Union[CouplingMap, Target]): CouplingMap of the inter-QPU connections. // Implementation pending.
++            alpha (float): Upfront penalty for inter-QPU SWAPs. Used with `penalized_swaps`.
++            beta (float): Fractional penalty per inter-QPU SWAP distance. Used with `penalized_swaps`.
++            extended_set_length (int): The length of the extended set used in the layout optimization.
++            custom_distance_matrix (List[List[float]]): A custom distance matrix to use for swap cost calculations. If not provided, the distance matrix will be derived from the coupling map. This can be used to implement custom swap cost heuristics.
++            
+         Raises:
+             TranspilerError: If both ``routing_pass`` and ``swap_trials`` or
+             both ``routing_pass`` and ``layout_trials`` are specified
+@@ -179,6 +195,30 @@ class SabreLayout(TransformationPass):
+         self.swap_trials = default_num_processes() if swap_trials is None else swap_trials
+         self.layout_trials = default_num_processes() if layout_trials is None else layout_trials
+         self.skip_routing = skip_routing
++        self.penalized_swaps = (
++            [tuple(sorted(swap)) for swap in penalized_swaps]
++            if penalized_swaps is not None else []
++        )
++        # Optionally remove duplicates:
++        self.penalized_swaps = list({swap for swap in self.penalized_swaps})
++
++        self.qubit_qpu_map = qubit_qpu_map if qubit_qpu_map is not None else [] # List mapping each
++                                                                                # physical qubit index
++                                                                                # to a QPU index.
++        self.inter_qpu_coupling_map = inter_qpu_coupling_map if inter_qpu_coupling_map is not None else None
++
++        # Parameters for inter-QPU swap penalties.
++        self.alpha = alpha
++        self.beta = beta
++        self.extended_set_length = extended_set_length
++        self.custom_distance_matrix = custom_distance_matrix if custom_distance_matrix is not None else None
++
++        # Compute inter-QPU distance matrix here, if inter_qpu_coupling_map is provided.
++        if self.inter_qpu_coupling_map is not None: # Using NetworkX for this.
++            G = DiGraph(inter_qpu_coupling_map)
++            set_edge_attributes(G, 1, "weight")
++            S = floyd_warshall_numpy(G)
++            self.inter_qpu_distance_matrix = S # 2D numpy array of inter-QPU distances.
+ 
+     @property
+     def coupling_map(self):  # pylint: disable=missing-function-docstring
+@@ -267,8 +307,8 @@ class SabreLayout(TransformationPass):
+         heuristic = (
+             Heuristic(attempt_limit=10 * self.target.num_qubits)
+             .with_basic(1.0, SetScaling.Constant)
+-            .with_lookahead(0.5, 20, SetScaling.Size)
+-            .with_decay(0.001, 5)
++            .with_lookahead(0.5, self.extended_set_length, SetScaling.Size)
++            # .with_decay(0.001, 5)
+         )
+         sabre_start = time.perf_counter()
+         # If `skip_routing`, then `out_dag` and `final` are meaningless but well-typed.
+@@ -282,6 +322,12 @@ class SabreLayout(TransformationPass):
+             seed=self.seed,
+             partial_layouts=starting_layouts,
+             skip_routing=self.skip_routing,
++            penalized_swaps=self.penalized_swaps,
++            qubit_qpu_map=self.qubit_qpu_map, # Used for *custom* `ExtendedSet` scoring.
++            inter_qpu_distance_matrix=getattr(self, 'inter_qpu_distance_matrix', None), # Used for *custom* `ExtendedSet` scoring.
++            alpha=self.alpha,
++            beta=self.beta,
++            custom_distance_matrix=self.custom_distance_matrix, # Used for *custom* `ExtendedSet`
+         )
+         sabre_stop = time.perf_counter()
+         logger.debug(
+diff --git a/qiskit/transpiler/passes/routing/sabre_swap.py b/qiskit/transpiler/passes/routing/sabre_swap.py
+index 2868bac19..07405b0e2 100644
+--- a/qiskit/transpiler/passes/routing/sabre_swap.py
++++ b/qiskit/transpiler/passes/routing/sabre_swap.py
+@@ -23,6 +23,7 @@ from qiskit.transpiler.target import Target, _FakeTarget
+ from qiskit.transpiler.coupling import CouplingMap
+ from qiskit.transpiler.passes.layout import disjoint_utils
+ from qiskit.utils import default_num_processes
++from networkx import DiGraph, set_edge_attributes, floyd_warshall_numpy
+ 
+ from qiskit._accelerate.sabre import sabre_routing, Heuristic, SetScaling, RoutingTarget
+ from qiskit._accelerate.nlayout import NLayout
+@@ -71,7 +72,14 @@ class SabreSwap(TransformationPass):
+     `arXiv:1809.02573 <https://arxiv.org/pdf/1809.02573.pdf>`_
+     """
+ 
+-    def __init__(self, coupling_map, heuristic="basic", seed=None, fake_run=False, trials=None):
++    def __init__(self, coupling_map, heuristic="basic", seed=None, fake_run=False, trials=None,
++                 penalized_swaps=None,
++                 qubit_qpu_map=None,
++                 inter_qpu_coupling_map=None,
++                 alpha=9.0,
++                 beta=3.0,
++                 extended_set_length=20,
++                 ):
+         r"""SabreSwap initializer.
+ 
+         Args:
+@@ -87,6 +95,13 @@ class SabreSwap(TransformationPass):
+                 CPUs on the local system. For reproducible results it is recommended
+                 that you set this explicitly, as the output will be deterministic for
+                 a fixed number of trials.
++            penalized_swaps (List[Tuple[int, int]]): List of physical qubit pairs
++                for which SWAPs should be penalized during routing.
++            qubit_qpu_map (List[int]): List mapping each physical qubit index to a QPU index.
++            inter_qpu_coupling_map (Union[CouplingMap, Target]): CouplingMap of the inter-QPU connections. // Implementation pending.
++            alpha (float): Upfront penalty for inter-QPU SWAPs. Used with `penalized_swaps`.
++            beta (float): Fractional penalty per inter-QPU SWAP distance. Used with `penalized_swaps`.
++            extended_set_length (int): The length of the extended set used in the heuristic cost function.
+ 
+         Raises:
+             TranspilerError: If the specified heuristic is not valid.
+@@ -135,7 +150,7 @@ class SabreSwap(TransformationPass):
+                     }
+         """
+         super().__init__()
+-        self._routing_target = None
++        # self._routing_target = None # Moved to Line 162.
+         if isinstance(coupling_map, Target) and not isinstance(coupling_map, _FakeTarget):
+             self.target = coupling_map
+         elif coupling_map is None:
+@@ -153,10 +168,37 @@ class SabreSwap(TransformationPass):
+                 basis_gates=["u", "cx"], coupling_map=coupling_map
+             )
+ 
++        self._routing_target = RoutingTarget.from_target(self.target) # Extract this now, to have
++                                                                      # immediate access to properties.
+         self.heuristic = heuristic
+         self.seed = seed
+         self.trials = default_num_processes() if trials is None else trials
+         self.fake_run = fake_run
++        self.penalized_swaps = (
++            [tuple(sorted(swap)) for swap in penalized_swaps]
++            if penalized_swaps is not None else []
++        )
++        # Optionally remove duplicates:
++        self.penalized_swaps = list({swap for swap in self.penalized_swaps})
++
++        self.qubit_qpu_map = qubit_qpu_map if qubit_qpu_map is not None else [] # List mapping each
++                                                                                # physical qubit index
++                                                                                # to a QPU index.
++        self.inter_qpu_coupling_map = inter_qpu_coupling_map if inter_qpu_coupling_map is not None else None
++        
++        # Parameters for inter-QPU swap penalties.
++        self.alpha = alpha
++        self.beta = beta
++
++        # Length of the extended set used in the heuristic cost function.
++        self.extended_set_length = extended_set_length
++
++        # Compute inter-QPU distance matrix here, if inter_qpu_coupling_map is provided.
++        if self.inter_qpu_coupling_map is not None: # Using NetworkX for this.
++            G = DiGraph(inter_qpu_coupling_map)
++            set_edge_attributes(G, 1, "weight")
++            S = floyd_warshall_numpy(G)
++            self.inter_qpu_distance_matrix = S # 2D numpy array of inter-QPU distances.
+ 
+     @functools.cached_property
+     def dist_matrix(self):  # pylint: disable=missing-function-docstring
+@@ -217,13 +259,13 @@ class SabreSwap(TransformationPass):
+             heuristic = (
+                 Heuristic(attempt_limit=10 * num_dag_qubits)
+                 .with_basic(1.0, SetScaling.Constant)
+-                .with_lookahead(0.5, 20, SetScaling.Size)
++                .with_lookahead(0.5, self.extended_set_length, SetScaling.Size)
+             )
+         elif self.heuristic == "decay":
+             heuristic = (
+                 Heuristic(attempt_limit=10 * num_dag_qubits)
+                 .with_basic(1.0, SetScaling.Constant)
+-                .with_lookahead(0.5, 20, SetScaling.Size)
++                .with_lookahead(0.5, self.extended_set_length, SetScaling.Size)
+                 .with_decay(0.001, 5)
+             )
+         else:
+@@ -233,7 +275,12 @@ class SabreSwap(TransformationPass):
+         initial_layout = NLayout.generate_trivial_layout(num_dag_qubits)
+         sabre_start = time.perf_counter()
+         dag, final_layout = sabre_routing(
+-            dag, self._routing_target, heuristic, initial_layout, self.trials, self.seed
++            dag, self._routing_target, heuristic, initial_layout, self.trials, self.seed,
++            penalized_swaps=self.penalized_swaps, # `run_in_parallel`: unused here.
++            qubit_qpu_map=self.qubit_qpu_map, # Used for *custom* `ExtendedSet` scoring.
++            inter_qpu_distance_matrix=getattr(self, 'inter_qpu_distance_matrix', None), # Used for *custom* `ExtendedSet` scoring.
++            alpha=self.alpha,
++            beta=self.beta,
+         )
+         sabre_stop = time.perf_counter()
+         LOG.debug("Sabre swap algorithm execution complete in: %s", sabre_stop - sabre_start)
