@@ -210,13 +210,50 @@ if current_usage >= capacity:
   experiments. Worth turning back on (`verify_equivalence=True`) when
   correctness, not throughput, is what you're checking.
 
-## Not part of these patches
+## QIG partitioning (paper §V-C): `qig-partitioning/`
 
-The paper's evaluation also covers a **Quantum Interaction Graph (QIG)**
-partitioning scheme (§V-C) and a **hybrid** approach that uses pytket-dqc's
-existing `PartitioningHeterogeneous`/`CoverEmbedding` allocators purely for
-initial mapping before handing off to CLA-SABRE (§V-B). Both are
-orchestration built on top of the SABRE variants and pytket-dqc components
-in these two patches, using pytket-dqc functionality that already exists
-upstream — they don't live inside either patch, and are not reproduced by
-this repo.
+Unlike the two items above, this isn't a patch — the QIG (Quantum
+Interaction Graph) pre-processing step doesn't modify either fork. It
+only needs a circuit, NumPy, and KaHyPar's Python bindings, so it ships as
+its own small importable package, `qig-partitioning/` (import name
+`qig_partitioning`), rather than being bundled into either patch or
+re-derived by every consumer of this repo.
+
+Where pytket-dqc builds a hypergraph over gate-level "packets," the QIG
+is a single global graph: *"vertices represent virtual qubits, and edge
+weights denote the total frequency of two-qubit gates between any pair
+across the entire circuit."* `qig_partitioning.build_interaction_graph`
+builds exactly that, and `partition_with_kahypar` partitions it into one
+block per core using the same KaHyPar library pytket-dqc uses (bundling
+its own copy of the `km1_kKaHyPar_sea20.ini` config so pytket-dqc doesn't
+need to be installed just to get that file).
+
+Because KaHyPar's own objective is topology-agnostic (it minimizes cut
+size, implicitly assuming an all-to-all inter-core topology), two
+post-processing steps adapt its output to the real, possibly
+heterogeneous hardware — matching the paper's own description verbatim:
+
+- **`match_partitions_to_cores`** — *"we evaluate all block-to-core
+  permutations, selecting the assignment that minimizes actual
+  communication costs based on the target hardware topology."*
+- **`enforce_strict_capacity` + `boundary_reallocation`** — the paper's
+  two-stage refinement: *"1) Strict Capacity Enforcement: if a core is
+  over-allocated, we evaluate all assigned virtual qubits, iteratively
+  ejecting the candidate that incurs the minimum communication penalty...
+  and moving it to an under-allocated core... 2) Boundary Reallocation:
+  we iteratively evaluate virtual qubits on partition boundaries, shifting
+  them to neighboring under-allocated cores if the move strictly reduces
+  global communication costs."*
+
+`get_heterogeneous_core_assignment` wraps all of the above into one call,
+returning a `{qubit: core}` mapping meant to seed a fixed initial layout
+for one of the three SABRE variants (see `notebooks/usage_demo.ipynb`).
+
+## Not part of these patches or this repo
+
+The paper's evaluation also covers a **hybrid** approach that uses
+pytket-dqc's existing `PartitioningHeterogeneous`/`CoverEmbedding`
+allocators purely for initial mapping before handing off to CLA-SABRE
+(§V-B). That's orchestration built on top of the pytket-dqc patch, using
+pytket-dqc functionality that already exists upstream — it doesn't live
+inside the patch, and isn't reproduced by this repo.

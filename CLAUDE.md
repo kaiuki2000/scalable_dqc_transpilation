@@ -7,23 +7,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This is a companion artifact for *"Scalable Transpilation for Overcoming
 Restricted Connectivity in Distributed Superconducting Quantum
 Architectures"* (Azenha, Polian & Brandhofer — QCE26 submission; full draft
-in `Paper_draft_portrait.pdf`). It does **not** contain a working codebase
-to build/lint/test — it ships small, self-contained patches against pinned
-upstream commits of two forked projects (Qiskit and pytket-dqc), so the
-changes under study can be reviewed in isolation without vendoring the full
-forks.
+in `Paper_draft_portrait.pdf`). It ships small, self-contained patches
+against pinned upstream commits of two forked projects (Qiskit and
+pytket-dqc), so the changes under study can be reviewed in isolation
+without vendoring the full forks, plus one standalone Python package
+(`qig-partitioning/`) for the one piece of the paper's method that doesn't
+modify either fork.
 
 The paper introduces three DQC-aware SABRE routing variants in Qiskit
-(**Default SABRE**, **(1,10) SABRE**, **CLA-SABRE**) and a
+(**Default SABRE**, **(1,10) SABRE**, **CLA-SABRE**), a
 superconducting-hardware-aware adaptation of pytket-dqc's distribution
-model. When describing or modifying this repo's content, use those names —
+model, and a QIG (Quantum Interaction Graph) partitioning pre-processing
+step. When describing or modifying this repo's content, use those names —
 they're the paper's own terminology, not something invented for this repo.
 See `MODIFICATIONS.md` for the mapping from paper section/equation to code.
 
-There is no build system, linter, or test suite in this repo itself. The patched
-code only builds/runs once applied to a checkout of the relevant upstream project
-(see "Applying the patches" below); any build/lint/test workflow belongs to that
-upstream project, not to this repo.
+There is no build system, linter, or test suite for the two patches
+themselves — that patched code only builds/runs once applied to a checkout
+of the relevant upstream project (see "Applying the patches" below); any
+build/lint/test workflow belongs to that upstream project, not to this
+repo. `qig-partitioning/` is the exception: it's ordinary, self-contained
+Python with its own `pyproject.toml` (see "QIG partitioning" below).
 
 ## Layout
 
@@ -36,6 +40,11 @@ patches/
     0001-superconducting-topology-awareness.patch
     basic_usage_demo.ipynb
     BASE_COMMIT.txt
+qig-partitioning/               # standalone package, no upstream to diff against
+  pyproject.toml
+  qig_partitioning/
+    partitioning.py
+    config/km1_kKaHyPar_sea20.ini
 env/
   qiskit/
     requirements.sh            # packages installed on top of Qiskit's own deps
@@ -105,15 +114,37 @@ because notebook JSON diffs are not reliably hand-applicable.
 Deliberately excluded from this patch: a CI-only change (removal of the fork's own
 GitHub Pages docs-deploy workflow) with no bearing on the algorithm.
 
-### Not part of these patches
+### `qig-partitioning/` (package, not a patch)
 
-The paper's evaluation also covers a Quantum Interaction Graph (QIG)
-partitioning scheme and a hybrid approach pairing pytket-dqc's existing
-allocators (`PartitioningHeterogeneous`, `CoverEmbedding`) with CLA-SABRE
-for initial mapping (§V-B, §V-C). Both are orchestration on top of what's
-in these two patches, using pytket-dqc functionality that already exists
-upstream — neither lives inside either patch, and neither is reproduced by
-this repo.
+Package name `qig-partitioning` (note the hyphen — it's deliberate, see
+below), import name `qig_partitioning`. Implements the paper's QIG
+pre-processing step (§V-C): one global interaction graph over a circuit's
+virtual qubits, partitioned into per-core blocks with KaHyPar, then
+adapted to real hardware capacity via the paper's own two-stage
+refinement (`enforce_strict_capacity`, `boundary_reallocation`). Only
+depends on `qiskit`, `numpy`, and `kahypar` — not on either patched fork —
+so it's ordinary installable Python (`pip install -e qig-partitioning/`),
+not a patch. Bundles a copy of pytket-dqc's `km1_kKaHyPar_sea20.ini`
+KaHyPar config (Apache-2.0, attributed in the file) as a default, so
+pytket-dqc doesn't need to be installed just to get it.
+
+The outer directory is named `qig-partitioning` (hyphen) while the
+importable package is `qig_partitioning` (underscore) *on purpose*: naming
+both identically causes Python to resolve `import qig_partitioning` to an
+empty implicit namespace package when the current working directory is
+the repo root (`''` in `sys.path` shadows the real, `pip install -e`-registered
+package) — this was caught by actually testing `import qig_partitioning`
+from the repo root, not by inspection. Don't rename the outer directory to
+match the package name; it will silently reintroduce this bug.
+
+### Not part of these patches or this repo
+
+The paper's evaluation also covers a hybrid approach pairing pytket-dqc's
+existing allocators (`PartitioningHeterogeneous`, `CoverEmbedding`) with
+CLA-SABRE for initial mapping (§V-B). That's orchestration on top of the
+pytket-dqc patch, using pytket-dqc functionality that already exists
+upstream — it doesn't live inside the patch, and isn't reproduced by this
+repo.
 
 ## Applying the patches
 

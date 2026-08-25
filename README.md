@@ -9,15 +9,18 @@ TODO: arXiv / DOI link once published.
 The paper tackles qubit mapping and routing for Distributed Quantum
 Computing (DQC) on near-term superconducting hardware, where inter-QPU
 links are scarce, high-latency, and topologically restricted compared to
-intra-QPU couplings. It ships two things, as small patches against pinned
-upstream commits rather than full forks:
+intra-QPU couplings. It ships three things:
 
 - Three **DQC-aware SABRE variants** in Qiskit (Default SABRE, (1,10)
   SABRE, and CLA-SABRE), which route with explicit awareness of which
-  SWAPs cross a QPU boundary.
+  SWAPs cross a QPU boundary — as a patch against a pinned upstream commit.
 - A **superconducting-hardware-aware distribution model** in pytket-dqc,
   used as one of the paper's baselines/building blocks, adapted to track
-  per-link (not per-server) communication capacity.
+  per-link (not per-server) communication capacity — also as a patch.
+- **QIG partitioning** (`qig-partitioning/`), the pre-processing step that
+  produces an initial per-core qubit assignment for the SABRE variants
+  above — a small, standalone Python package, since it doesn't modify
+  either fork.
 
 ## What's actually different
 
@@ -42,6 +45,11 @@ upstream commits rather than full forks:
   hardware connects separate modules with links of differing capacity —
   the paper's adaptation of pytket-dqc for restricted (non-all-to-all)
   intra-core connectivity.
+- **QIG partitioning** — a lightweight alternative to pytket-dqc's
+  hypergraph model: one global interaction graph over the whole circuit's
+  virtual qubits, partitioned per-core with KaHyPar, then adapted to real
+  hardware capacity limits by matching abstract blocks to physical cores
+  and reallocating boundary qubits — see `qig-partitioning/`.
 
 For the actual diffs, hand-picked, annotated, and mapped to the paper's
 equations and section numbers: see [`MODIFICATIONS.md`](MODIFICATIONS.md).
@@ -75,6 +83,11 @@ patches/
     0001-superconducting-topology-awareness.patch
     basic_usage_demo.ipynb
     BASE_COMMIT.txt
+qig-partitioning/              # standalone package: QIG partitioning pre-processing (paper §V-C)
+  pyproject.toml
+  qig_partitioning/
+    partitioning.py
+    config/km1_kKaHyPar_sea20.ini
 env/
   qiskit/
     requirements.sh            # packages installed on top of Qiskit's own deps
@@ -151,15 +164,38 @@ these installed system-wide:
   for the exact steps, which are more involved than a `pip install` and
   specific enough to your OS/compiler that we're not duplicating them here.
 
-## Not part of these patches
+## Using QIG partitioning
 
-The paper's evaluation also covers a Quantum Interaction Graph (QIG)
-partitioning scheme and a hybrid approach that pairs pytket-dqc's existing
-allocators with CLA-SABRE for initial mapping (§V). Both are orchestration
-built on top of what's in these two patches, using pytket-dqc
-functionality that already exists upstream — see
-[`MODIFICATIONS.md`](MODIFICATIONS.md) for what is and isn't reproduced
-here.
+Unlike the two patches above, `qig-partitioning/` doesn't modify either
+fork — it's ordinary installable Python, so it's just:
+
+```bash
+pip install -e /path/to/scalable_dqc_transpilation/qig-partitioning
+```
+
+```python
+from qig_partitioning import get_heterogeneous_core_assignment
+
+core_cost_matrix = {0: {0: 0.0, 1: 1.0}, 1: {1: 0.0, 0: 1.0}}  # 2 cores, uniform cost
+assignment = get_heterogeneous_core_assignment(qc, core_cost_matrix, max_capacity=64)
+```
+
+**Verified.** Tested end-to-end on a synthetic circuit with three
+tightly-coupled qubit clusters and a hard per-core capacity: it correctly
+placed each cluster on its own core and respected the capacity limit. See
+`notebooks/usage_demo.ipynb` for the full pipeline — QIG partitioning
+feeding a fixed initial layout into the three SABRE variants.
+
+## Not part of these patches or this repo
+
+The paper's evaluation also covers a hybrid approach that pairs
+pytket-dqc's existing `PartitioningHeterogeneous`/`CoverEmbedding`
+allocators with CLA-SABRE for initial mapping (§V-B). That's
+orchestration built on top of the pytket-dqc patch, using pytket-dqc
+functionality that already exists upstream — it doesn't live inside the
+patch, and isn't reproduced by this repo. See
+[`MODIFICATIONS.md`](MODIFICATIONS.md) for the full picture of what is
+and isn't reproduced here.
 
 ## License
 

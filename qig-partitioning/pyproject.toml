@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qig-partitioning"
+version = "0.1.0"
+description = "Quantum Interaction Graph (QIG) partitioning pre-processing step from \"Scalable Transpilation for Overcoming Restricted Connectivity in Distributed Superconducting Quantum Architectures\" (paper Section V-C)."
+requires-python = ">=3.10"
+dependencies = [
+    "qiskit>=1.0",
+    "numpy",
+    "kahypar",
+]
+
+[tool.setuptools.packages.find]
+include = ["qig_partitioning"]
+
+[tool.setuptools.package-data]
+qig_partitioning = ["config/*.ini"]
