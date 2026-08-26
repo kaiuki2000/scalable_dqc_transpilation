@@ -50,8 +50,13 @@ env/
   requirements-freeze.txt          # pip freeze of the combined environment (both forks) used
                                     # for the paper's experiments
   requirements-list.txt
-  requirements-freeze-slurm.txt    # pip freeze from a later, post-submission environment;
-  requirements-list-slurm.txt      # reference only, not the one the results were produced on
+  requirements-freeze-slurm.txt    # pip freeze from a later, post-submission environment; not
+  requirements-list-slurm.txt      # the one the paper's results were produced on, but this pair
+                                    # is what "Reproducing the environment" in README.md and
+                                    # docker/Dockerfile actually build from now, since it's the
+                                    # one that includes pytket-qiskit (see README's env/
+                                    # description) -- requirements-freeze.txt above remains the
+                                    # historical record of the paper's own results environment
 docker/
   Dockerfile                       # builds both patches + qig-partitioning into one environment
 ```
@@ -143,38 +148,41 @@ match the package name; it will silently reintroduce this bug.
 
 ### Not part of these patches or this repo
 
-The paper's evaluation also covers a hybrid approach pairing pytket-dqc's
+The paper's evaluation also covers a hybrid approach that pairs pytket-dqc's
 existing allocators (`PartitioningHeterogeneous`, `CoverEmbedding`) with
-CLA-SABRE for initial mapping (§V-B). That's orchestration on top of the
-pytket-dqc patch, using pytket-dqc functionality that already exists
-upstream — it doesn't live inside the patch, and isn't reproduced by this
-repo.
+CLA-SABRE for initial mapping (§V-B), which needs `pytket-qiskit` to bridge
+the two — the environment setup below installs it as part of the frozen
+environment either way. What's *not* here is the orchestration itself: the
+actual script/notebook calling pytket-dqc's allocators and CLA-SABRE
+together for that experiment. That's built on functionality that already
+exists upstream in both forks — it doesn't live inside either patch, and
+isn't reproduced by this repo.
 
 ## Applying the patches
 
-```bash
-# Qiskit
-git clone https://github.com/Qiskit/qiskit.git
-cd qiskit
-git checkout 848178940d2def0dbdee578d20ce5e6b3451f4c2
-git apply /path/to/scalable_dqc_transpilation/patches/qiskit/0001-dqc-aware-sabre-variants.patch
-# build as usual (maturin develop / pip install -e ., see env/requirements.sh)
+Base commits and patch paths:
 
-# pytket-dqc
-git clone https://github.com/Quantinuum/pytket-dqc.git
-cd pytket-dqc
-git checkout bfa0b4eff5b77d0a9b3c260c7842e57e75091796
-git apply /path/to/scalable_dqc_transpilation/patches/pytket-dqc/0001-superconducting-topology-awareness.patch
-cp /path/to/scalable_dqc_transpilation/patches/pytket-dqc/basic_usage_demo.ipynb examples/basic_usage.ipynb
-```
+- Qiskit: base `848178940d2def0dbdee578d20ce5e6b3451f4c2` (tag `2.2.0rc1`,
+  **not** the final `2.2.0` tag — the patch won't apply cleanly there),
+  patch `patches/qiskit/0001-dqc-aware-sabre-variants.patch`.
+- pytket-dqc: base `bfa0b4eff5b77d0a9b3c260c7842e57e75091796` (clean pin at
+  `origin/main`'s tip, no upstream drift), patch
+  `patches/pytket-dqc/0001-superconducting-topology-awareness.patch`, plus
+  `patches/pytket-dqc/basic_usage_demo.ipynb` copied over
+  `examples/basic_usage.ipynb`.
 
-`docker/Dockerfile` automates both of the above (plus the manual KaHyPar build
-pytket-dqc's own README recommends, and `qig-partitioning/`) into one built
-image with both forks installed together; see the comments at its top for
-build/run instructions and the reasoning behind each step.
-
-Both patches have been verified to apply cleanly (`git apply --check`) against a
-fresh worktree at their pinned base commit.
+Both have been verified to apply cleanly (`git apply --check`) against a
+fresh worktree at their pinned base commit — but applying the patch is only
+one step of a longer, order-dependent sequence (build KaHyPar from source
+first, including a required pybind11 swap for Python ≥3.11; bulk-install a
+frozen environment; *then* build+patch Qiskit; *then* pytket-dqc — each step
+exists to avoid a specific, previously-hit failure, not arbitrary ordering).
+Don't reconstruct that sequence from memory or from an older version of this
+file: `README.md`'s "Reproducing the environment" section is the up-to-date,
+step-by-step version of it, verified against a real build; `docker/Dockerfile`
+runs the same sequence in a container and has been build-tested end to end.
+If you're setting this up (or advising someone through it), follow one of
+those two, not a reconstruction from what's summarized here.
 
 ## Working on this repo
 
