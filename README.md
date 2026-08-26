@@ -89,10 +89,14 @@ qig-partitioning/              # standalone package: QIG partitioning pre-proces
     partitioning.py
     config/km1_kKaHyPar_sea20.ini
 env/
-  qiskit/
-    requirements.sh            # packages installed on top of Qiskit's own deps
-    requirements-freeze.txt    # pip freeze of the environment used for experiments
-    requirements-list.txt
+  requirements.sh                  # extra packages on top of Qiskit's/pytket-dqc's own deps
+  requirements-freeze.txt          # pip freeze of the combined environment (both forks) used
+                                    # for the paper's experiments
+  requirements-list.txt
+  requirements-freeze-slurm.txt    # pip freeze from a later, post-submission environment;
+  requirements-list-slurm.txt      # reference only, not the one the results were produced on
+docker/
+  Dockerfile                       # builds both patches + qig-partitioning into one environment
 ```
 
 ## Reproducing the environment
@@ -107,7 +111,7 @@ git clone https://github.com/Qiskit/qiskit.git
 cd qiskit
 git checkout 848178940d2def0dbdee578d20ce5e6b3451f4c2
 git apply /path/to/scalable_dqc_transpilation/patches/qiskit/0001-dqc-aware-sabre-variants.patch
-# build as usual (maturin develop / pip install -e ., see env/qiskit/requirements.sh)
+# build as usual (maturin develop / pip install -e ., see env/requirements.sh)
 
 # pytket-dqc
 git clone https://github.com/Quantinuum/pytket-dqc.git
@@ -131,7 +135,7 @@ their pinned base commit.
 core via maturin). One thing not obvious from the patch alone: it adds a
 hard `from networkx import ...` import (used to compute the inter-QPU
 distance matrix) that isn't declared in Qiskit's own `pyproject.toml` —
-install it explicitly (`env/qiskit/requirements.sh` already does this).
+install it explicitly (`env/requirements.sh` already does this).
 Ran an actual routing test: on a toy 2-QPU coupling map with one inter-QPU
 link, baseline `SabreSwap` crossed that link once; with CLA-SABRE's
 `penalized_swaps`/`qubit_qpu_map`/`inter_qpu_coupling_map` set, it crossed
@@ -163,6 +167,19 @@ these installed system-wide:
   [pytket-dqc's own build instructions](https://github.com/Quantinuum/pytket-dqc#kahypar-with-python-interface)
   for the exact steps, which are more involved than a `pip install` and
   specific enough to your OS/compiler that we're not duplicating them here.
+
+`docker/Dockerfile` automates all of the above (both patches, the manual
+KaHyPar build, and `qig-partitioning/`) into one built image with both forks
+installed together, so you don't have to work through this section by hand;
+see the comments at the top of that file for build/run instructions.
+
+**Not build-tested yet.** Testing it means running the build somewhere with a
+Docker daemon, then, from a shell inside the resulting container, checking
+that each piece imports (see `docker/Dockerfile`'s header comment for the
+exact commands) and, ideally, exercising a real KaHyPar partitioning call
+(e.g. `qig_partitioning.partition_with_kahypar(...)`) — a successful `import
+kahypar` alone doesn't rule out the broken-PyPI-wheel failure mode described
+above, since that only surfaces at partition time.
 
 ## Using QIG partitioning
 

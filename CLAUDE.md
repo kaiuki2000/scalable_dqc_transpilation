@@ -46,10 +46,14 @@ qig-partitioning/               # standalone package, no upstream to diff agains
     partitioning.py
     config/km1_kKaHyPar_sea20.ini
 env/
-  qiskit/
-    requirements.sh            # packages installed on top of Qiskit's own deps
-    requirements-freeze.txt    # pip freeze of the environment used for experiments
-    requirements-list.txt
+  requirements.sh                  # extra packages on top of Qiskit's/pytket-dqc's own deps
+  requirements-freeze.txt          # pip freeze of the combined environment (both forks) used
+                                    # for the paper's experiments
+  requirements-list.txt
+  requirements-freeze-slurm.txt    # pip freeze from a later, post-submission environment;
+  requirements-list-slurm.txt      # reference only, not the one the results were produced on
+docker/
+  Dockerfile                       # builds both patches + qig-partitioning into one environment
 ```
 
 Each `patches/<project>/BASE_COMMIT.txt` records the exact pinned upstream commit
@@ -154,7 +158,7 @@ git clone https://github.com/Qiskit/qiskit.git
 cd qiskit
 git checkout 848178940d2def0dbdee578d20ce5e6b3451f4c2
 git apply /path/to/scalable_dqc_transpilation/patches/qiskit/0001-dqc-aware-sabre-variants.patch
-# build as usual (maturin develop / pip install -e ., see env/qiskit/requirements.sh)
+# build as usual (maturin develop / pip install -e ., see env/requirements.sh)
 
 # pytket-dqc
 git clone https://github.com/Quantinuum/pytket-dqc.git
@@ -163,6 +167,11 @@ git checkout bfa0b4eff5b77d0a9b3c260c7842e57e75091796
 git apply /path/to/scalable_dqc_transpilation/patches/pytket-dqc/0001-superconducting-topology-awareness.patch
 cp /path/to/scalable_dqc_transpilation/patches/pytket-dqc/basic_usage_demo.ipynb examples/basic_usage.ipynb
 ```
+
+`docker/Dockerfile` automates both of the above (plus the manual KaHyPar build
+pytket-dqc's own README recommends, and `qig-partitioning/`) into one built
+image with both forks installed together; see the comments at its top for
+build/run instructions and the reasoning behind each step.
 
 Both patches have been verified to apply cleanly (`git apply --check`) against a
 fresh worktree at their pinned base commit.

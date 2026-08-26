@@ -1,0 +1,12 @@
+.git
+.claude
+Paper_draft_portrait.pdf
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+.eggs
+build
+dist
+.ipynb_checkpoints
+.venv
+venv
