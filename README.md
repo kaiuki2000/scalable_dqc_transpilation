@@ -199,4 +199,6 @@ and isn't reproduced here.
 
 ## License
 
-MIT, see `LICENSE`.
+Apache License 2.0, see `LICENSE`. This matches the license of both upstream
+projects the patches are derived from (Qiskit and pytket-dqc), which are
+themselves Apache-2.0.

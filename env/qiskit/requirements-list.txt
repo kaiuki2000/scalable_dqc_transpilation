@@ -50,7 +50,7 @@ pyparsing               3.2.5
 pyspnego                0.12.0
 python-dateutil         2.9.0.post0
 pyzmq                   27.1.0
-qiskit                  2.2.0rc1    /home/azenhaao/Workspace/qiskit
+qiskit                  2.2.0rc1    <local-qiskit-checkout>
 qiskit-ibm-runtime      0.41.1
 requests                2.32.5
 requests_ntlm           1.3.0

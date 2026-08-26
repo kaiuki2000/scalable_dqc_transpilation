@@ -1,10 +1,5 @@
 {
   "permissions": {
-    "additionalDirectories": [
-      "/home/azenhaao/Desktop/qiskit",
-      "/home/azenhaao/Desktop/pytket-dqc",
-      "/home/azenhaao/Desktop/mqpu-ustutt-ibm"
-      ],
     "allow": [],
     "deny": [
       "Bash(rm -rf:*)",

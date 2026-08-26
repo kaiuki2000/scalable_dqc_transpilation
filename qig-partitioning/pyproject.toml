@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "qig-partitioning"
 version = "0.1.0"
 description = "Quantum Interaction Graph (QIG) partitioning pre-processing step from \"Scalable Transpilation for Overcoming Restricted Connectivity in Distributed Superconducting Quantum Architectures\" (paper Section V-C)."
+license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 dependencies = [
     "qiskit>=1.0",
