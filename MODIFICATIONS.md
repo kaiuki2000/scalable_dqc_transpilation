@@ -5,8 +5,8 @@ pulled out of the full patches in `patches/` and annotated against the
 paper itself (`Paper_draft_portrait.pdf` in this repo — *"Scalable
 Transpilation for Overcoming Restricted Connectivity in Distributed
 Superconducting Quantum Architectures,"* Azenha, Polian & Brandhofer). It's
-meant to be read, not applied — see `README.md` for how to apply the real
-patches to a working checkout.
+meant to be read, not applied — see `docs/INSTALL.md` for how to apply the
+real patches to a working checkout, or `README.md` for the Docker route.
 
 ## Qiskit: three DQC-aware SABRE variants (paper §IV)
 
