@@ -7,8 +7,8 @@ Azenha, Ilia Polian, Sebastian Brandhofer (QCE26 submission). Full draft:
 follow.*
 
 Qubit mapping and routing for Distributed Quantum Computing (DQC) on near-term
-superconducting hardware, where inter-QPU links are scarce, slow, and
-topologically restricted compared to intra-QPU couplings. Three contributions,
+superconducting hardware, where inter-QPU links are scarce and roughly an
+order of magnitude noisier than intra-QPU couplings. Three contributions,
 shipped as two patches against pinned upstream commits plus one standalone
 package:
 
