@@ -38,6 +38,11 @@ Method abbreviations used in both tables:
 | QIG | Quantum Interaction Graph partitioning (§V-C) |
 | T.O. | Timed out |
 
+Produced by the scripts in [`examples/`](../examples/) —
+`three_square_architecture/` for Table II and Fig. 2, `flamingo_architecture/`
+for Table III and Fig. 3. [`examples/README.md`](../examples/README.md) says
+which script produces which rows.
+
 ## Table II — 48-qubit (3x16 square cores, all-to-all), relative to DMapS
 
 Geometric-mean ratios. 1-hour timeout. **Bold** = best per column.

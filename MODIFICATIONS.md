@@ -417,11 +417,14 @@ heterogeneous hardware — matching the paper's own description verbatim:
 returning a `{qubit: core}` mapping meant to seed a fixed initial layout
 for one of the three SABRE variants (see `notebooks/usage_demo.ipynb`).
 
-## Not part of these patches or this repo
+## Not part of these patches — but in `examples/`
 
 Three pieces of the paper's method are described in the text but are not
-found in either patch. They are listed here so the mapping from paper to
-code stays honest.
+found in either patch. All three live in the experiment scripts under
+[`examples/`](examples/), which are *callers* of the patched code rather
+than changes to it; `examples/README.md` maps each to the function
+implementing it. They are listed here so the mapping from paper to code
+stays honest.
 
 **The pseudo-sink subcircuit-generation machinery (§V-A, Table I,
 Fig. 1).** The paper describes *two* modifications to pytket-dqc. The
@@ -438,22 +441,46 @@ the SABRE-side half of it: the flat-`α` "virtual sink" penalty branch in
 `route.rs` described earlier, which penalises SWAPs involving sinks once
 something else has created them. Sink insertion, placeholder insertion,
 edge-weight assignment and per-core subcircuit generation live in the
-experiment orchestration, outside both forks.
+experiment orchestration, outside both forks — specifically in
+`examples/mqpu_utils.py` (`RoutingPlaceholder`, `MakePlaceholdersOpaque`,
+`create_subcircuit`, `build_distributed_subcircuits`,
+`squash_placeholders_per_pair`, `remove_routing_placeholders`), with Table I's
+weights as the `weight_lookup` dict in each
+`examples/three_square_architecture/*_hypergraph.py`. The Big-M sink mode is
+selected by passing `alpha=100000.0, beta=0.0`, since `beta = 0.0` is what
+makes `is_real_mqpu` false.
 
 **Aggregated-cost trial selection (§IV-B, Eq. 1).** As detailed under
 "Default SABRE" above, the fork still selects the best routing trial by
 raw SWAP count. Choosing by \(C_{agg} = 10 \times N_{EPR} +
-N_{local\,SWAP}\) is done outside the fork.
+N_{local\,SWAP}\) is done outside the fork, in each experiment script's
+routing loop:
+
+```python
+# examples/**/*.py
+total_eprs = (routing_metrics["final_inter_swaps"] * 3) + routing_metrics["final_inter_czs"]
+aggregated_cost = (total_eprs * f_weight) + intra_swaps
+if aggregated_cost < best_cost:
+    ...
+```
+
+Note the EPR accounting this implies: an inter-QPU SWAP costs three EPR pairs,
+an inter-QPU CZ costs one.
 
 **The §V-B hybrid orchestration.** The paper's hybrid approach uses
 pytket-dqc's existing `PartitioningHeterogeneous`/`CoverEmbedding`
 allocators purely for initial mapping before handing off to CLA-SABRE.
-That's orchestration built on top of the pytket-dqc patch, using
-pytket-dqc functionality that already exists upstream — it doesn't live
-inside the patch, and isn't reproduced by this repo.
+That's orchestration built on top of the pytket-dqc patch, using pytket-dqc
+functionality that already exists upstream — it doesn't live inside the patch.
+The bridge between the two is `examples/mqpu_utils.py`'s
+`generate_pytket_dqc_init_layout` and
+`pytket_dqc_init_layout_to_qiskit_initial_layout`.
 
 What all three have in common is that they are *callers* of the patched
 code rather than changes to it. The patches provide the primitives the
 paper needs (per-link capacity, a pluggable distance matrix, the CLA cost
-terms, the sink penalty); the scripts that compose them into the paper's
-five evaluated pipelines are not part of this artifact.
+terms, the sink penalty); `examples/` composes them into the paper's evaluated
+pipelines.
+
+Still genuinely absent: **DMapS**, the external state-of-the-art baseline both
+tables compare against, which is a third-party tool and not reproduced here.

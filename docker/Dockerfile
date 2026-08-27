@@ -154,9 +154,17 @@ RUN pip install --no-cache-dir --no-deps -e /opt/qig-partitioning
 COPY notebooks /opt/notebooks
 COPY MODIFICATIONS.md /opt/
 
+# The paper's experiment scripts, plus the benchmark circuits they read. This
+# image is the only environment that can run them, so they ship with it.
+# Requires `examples` to be readable from the build context -- .dockerignore
+# must not exclude it. See examples/README.md for what each script produces.
+COPY examples /opt/examples
+
 # Keep /opt free of directories named after importable modules -- see the
-# qiskit-src note above. qiskit-src, pytket-dqc and qig-partitioning are all
-# safe (import names: qiskit, pytket_dqc, qig_partitioning).
+# qiskit-src note above. qiskit-src, pytket-dqc, qig-partitioning and examples
+# are all safe (import names: qiskit, pytket_dqc, qig_partitioning; and
+# examples/ is not a package -- its scripts put examples/ on sys.path
+# themselves).
 WORKDIR /opt
 
 CMD ["/bin/bash"]

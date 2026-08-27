@@ -38,6 +38,7 @@ Don't duplicate these explanations back into other files; link to them.
 | `docs/INSTALL.md` | The native (non-Docker) build sequence, commands-first. |
 | `docs/BUILD-NOTES.md` | Why each build step is the way it is, and the verification status table. The authority on *why the build is shaped like this*. |
 | `docker/Dockerfile` | The same sequence in a container; comments are pointers into `docs/BUILD-NOTES.md`. |
+| `examples/README.md` | Which script produces which table rows, the paper-feature → function map, and the recorded deviations from the original scripts. |
 
 ## Layout
 
@@ -56,6 +57,13 @@ env/
                                             # builds from it
 figures/          result figures (PNG, referenced by docs/RESULTS.md)
 notebooks/        usage_demo.ipynb
+examples/
+  mqpu_utils.py         shared experiment machinery (conjoined backends,
+                        pseudo-sinks, circuit generation) -- 1935 lines
+  experiment_utils.py   results bookkeeping
+  three_square_architecture/   6 scripts -> Table II
+  flamingo_architecture/       2 scripts -> Table III
+  benchmarks/                  structured benchmark circuits (QASM)
 ```
 
 Each `patches/<project>/BASE_COMMIT.txt` records the exact pinned upstream
@@ -103,6 +111,21 @@ or from an older version of a doc** — follow `docs/INSTALL.md` or
 - The full forks these patches derive from live outside this repository. Don't
   assume their source files are available locally when reasoning about this repo
   in isolation.
+
+## The `examples/` scripts are reproduction artifacts
+
+They are the experiment scripts as they were run, taken verbatim from
+`kaiuki2000/mqpu-ustutt-ibm` at `48dbc57`, with exactly five recorded
+deviations listed in `examples/README.md`. Treat them the way the patches are
+treated: **do not refactor, tidy, deduplicate or lint them.** Their dead
+imports, shadowed names, commented-out debugging and near-duplicate structure
+are part of what is being reproduced. If a genuine change is needed, add it to
+the deviations list in `examples/README.md` in the same commit.
+
+The one substantive edit already made is worth knowing about: each QIG-using
+script carried its own inline copy of the QIG algorithm, and all five now
+import `qig_partitioning` instead. Don't reintroduce an inline copy — the
+package is the single source of truth for that method.
 
 ## Documentation style
 

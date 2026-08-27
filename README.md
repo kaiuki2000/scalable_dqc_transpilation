@@ -82,6 +82,9 @@ Inside the container:
 python -c "import qiskit, pytket_dqc, kahypar, qig_partitioning; print('OK')"
 ```
 
+The image also carries the paper's experiment scripts and benchmark circuits at
+`/opt/examples` — see [`examples/README.md`](examples/README.md).
+
 **New to Docker?** It runs the whole environment in an isolated container, so
 nothing is installed on your machine and you can delete it with
 `docker rmi dqc-env`. You need Docker installed and its daemon running
@@ -128,6 +131,8 @@ patches/
   qiskit/                  DQC-aware SABRE variants + pinned base commit
   pytket-dqc/              superconducting topology awareness + pinned base commit
 qig-partitioning/          standalone package: QIG pre-processing (paper §V-C)
+examples/                  the experiment scripts that produced the results, plus
+                           the benchmark circuits they run on
 docker/Dockerfile          builds both patches + qig-partitioning into one environment
 env/                       pip freezes of the reproduction environment
 notebooks/usage_demo.ipynb illustrative end-to-end example
@@ -137,18 +142,28 @@ figures/                   result figures from the paper
 Each `patches/<project>/BASE_COMMIT.txt` records the exact pinned upstream
 commit and how the patch was generated.
 
-## Not reproduced here
+## Reproducing the paper's experiments
 
-The patches provide the primitives the paper's method needs. The scripts that
-compose them into the paper's evaluated pipelines are not part of this
-artifact, and three pieces of the method live in those scripts rather than in
-either fork: the §V-B hybrid orchestration, the aggregated-cost trial selection
-of §IV-B, and the pseudo-sink subcircuit generation of §V-A (whose SABRE-side
-penalty *is* in the Qiskit patch, but whose sink insertion and Table I edge
-weights are not).
+The patches provide the primitives; a good deal of the paper's method lives in
+orchestration code that sits in neither fork. That code is in
+[`examples/`](examples/) — the experiment scripts as they were run, together
+with the structured benchmark circuits:
 
-[`MODIFICATIONS.md`](MODIFICATIONS.md) accounts for each of these against the
-paper's own text.
+```
+examples/three_square_architecture/   48-qubit runs   (Table II, Fig. 2)
+examples/flamingo_architecture/       399-qubit runs  (Table III, Fig. 3)
+examples/benchmarks/                  structured benchmark circuits (QASM)
+```
+
+That is where the pseudo-sink subcircuit generation of §V-A, the
+aggregated-cost trial selection of §IV-B, the conjoined-backend construction,
+and the §V-B hybrid bridge actually live. [`examples/README.md`](examples/README.md)
+maps each paper feature to the function implementing it, says which script
+produces which table rows, and lists the deviations from the originals.
+
+Not included: DMapS, the external baseline both tables compare against, and two
+oversized benchmark circuits (noted in `examples/README.md`, with instructions
+to regenerate them).
 
 ## License
 
