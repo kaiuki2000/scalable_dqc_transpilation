@@ -223,7 +223,9 @@ paper's results were produced from.
 ## pytket-dqc: superconducting hardware adaptation (paper §V-A)
 
 `patches/pytket-dqc/0001-superconducting-topology-awareness.patch`, base
-pytket-dqc `bfa0b4e` (tip of `origin/main`).
+pytket-dqc `bfa0b4e` (tip of `origin/main`), diffed against
+[`5a28ad6`](https://github.com/kaiuki2000/pytket-dqc/tree/5a28ad66581b1008e32b8cd74688b8c6a3383888)
+on the fork.
 
 The paper is explicit that pytket-dqc *"assumes all-to-all intra-core
 connectivity, a model invalid for near-term superconducting hardware,"*
@@ -330,6 +332,44 @@ fails loudly.
   both loses every capacity and compares unequal to `n` whenever any
   capacity is set.
 
+### `check_equivalence`'s `distributed_comparison` flag
+
+`src/pytket_dqc/utils/verification.py` gains a fourth parameter:
+
+```python
+def check_equivalence(
+    circ1: Circuit, circ2: Circuit, qubit_mapping: dict[Qubit, Qubit],
+    distributed_comparison: bool = False
+) -> bool:
+    ...
+    if distributed_comparison:
+        zx1 = to_pyzx(circ1, qubits2)   # circ1 masked with the *distributed* qubit set
+        zx2 = to_pyzx(circ2, qubits2)
+    else:
+        zx1 = to_pyzx(circ1, qubits1)
+        zx2 = to_pyzx(circ2, qubits2)
+```
+
+The default path assumes `circ1` is the *original, monolithic* circuit and
+`circ2` its distributed counterpart, so it masks them with
+`qubit_mapping.keys()` and `.values()` respectively. `to_pyzx` projects
+anything outside the mask to |0>.
+
+That assumption breaks when both arguments are distributed circuits — when
+checking one distributed circuit against another, as the experiment scripts
+do after rebuilding a distributed circuit from per-core subcircuits. There
+`circ1` carries link qubits and EJPP start/end processes that are absent from
+`qubit_mapping.keys()`, so they would fall outside the mask and be projected
+to |0>, which `to_pyzx`'s own docstring notes is *not* equivalent to an EJPP
+ending process. Setting `distributed_comparison=True` masks `circ1` with the
+distributed-side qubit set instead, making the comparison meaningful.
+
+This is what `examples/three_square_architecture/*_hypergraph.py` pass. The
+flag is required for those scripts to run: it was missing from an earlier
+revision of this patch, and the scripts raised `TypeError: check_equivalence()
+got an unexpected keyword argument 'distributed_comparison'` partway through
+the pytket-dqc path.
+
 ## Also bundled in (not the headline contribution, but part of the same patch)
 
 - **Steiner-tree and shortest-path memoization** in `Distribution`
@@ -368,15 +408,23 @@ fails loudly.
   which will silently answer `False` rather than fail if pytket ever
   changes how these custom gates render — worth knowing if start/end
   process accounting ever looks wrong.
-- **Debug instrumentation in `allocators/hypergraph_partitioning.py`.**
-  This file is listed among those the patch touches, but it contains *no*
-  algorithmic change: the hunks add five unconditional `print()` calls and
-  `perf_counter` timings around `HypergraphCircuit` construction,
-  `initial_distribute` and `make_valid`. They are useful for reproducing
-  the paper's runtime breakdown, but they print to stdout from library
-  code on every allocation, and by this repo's own rule (keep patches
-  scoped to the algorithmic contribution) they are the one piece of
-  repo-local noise that survived into a shipped patch.
+- **Debug instrumentation in three files**, containing *no* algorithmic
+  change at all:
+  - `allocators/hypergraph_partitioning.py` — five unconditional `print()`
+    calls and `perf_counter` timings around `HypergraphCircuit` construction,
+    `initial_distribute` and `make_valid`.
+  - `distributors/partitioning_heterogeneous.py` — four prints timing the
+    initial partitioning and the boundary reallocation separately.
+  - `distributors/cover_embedding.py` — two prints timing the `VertexCover`
+    refinement.
+
+  Together these are where the paper's runtime discussion of pytket-dqc's
+  scaling behaviour came from, which is why they exist. But they print to
+  stdout from library code on every call, and by this repo's own rule (keep
+  patches scoped to the algorithmic contribution) they are the one category
+  of repo-local noise that survives into a shipped patch. Stripping the
+  debug-only hunks while keeping `verification.py`'s functional change would
+  be straightforward if that is ever wanted.
 
 ## QIG partitioning (paper §V-C): `qig-partitioning/`
 

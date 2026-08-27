@@ -4,12 +4,43 @@ This is the upstream pytket-dqc commit "ci(py-deps): update mypy
 requirement (#152)" in Quantinuum/pytket-dqc, which is also the tip of
 origin/main as of this writing -- a clean, undiverged pin.
 
+The patch in this directory is generated as the diff between the above
+base commit and:
+
+  5a28ad66581b1008e32b8cd74688b8c6a3383888
+  https://github.com/kaiuki2000/pytket-dqc/tree/5a28ad66581b1008e32b8cd74688b8c6a3383888
+
+restricted to src/pytket_dqc/ (see the exclusions below). That commit,
+"Add pytket-dqc modifications missed in initial port" (27 August), is the
+current tip of the fork. It completes an earlier partial port: the
+modifications were originally made directly inside a local virtualenv
+rather than in a checkout, and three files were missed when they were
+copied across -- src/pytket_dqc/utils/verification.py,
+src/pytket_dqc/distributors/cover_embedding.py and
+src/pytket_dqc/distributors/partitioning_heterogeneous.py.
+
+The verification.py omission was not cosmetic: it adds the
+`distributed_comparison` parameter to check_equivalence, which the
+experiment scripts under examples/ pass. Without it, two of the three
+48-qubit hypergraph scripts raise TypeError partway through their
+pytket-dqc path. See MODIFICATIONS.md.
+
+Deliberately excluded from this patch:
+  - .github/workflows/deploy_docs.yml (removed on the fork; CI-only, with
+    no bearing on the algorithm)
+  - examples/basic_usage.ipynb (shipped separately as basic_usage_demo.ipynb;
+    see below)
+
 To reproduce the base checkout:
   git clone https://github.com/Quantinuum/pytket-dqc.git
   cd pytket-dqc
   git checkout bfa0b4eff5b77d0a9b3c260c7842e57e75091796
   git apply /path/to/0001-superconducting-topology-awareness.patch
   cp /path/to/basic_usage_demo.ipynb examples/basic_usage.ipynb
+
+Verified: the patch applies cleanly (git apply --check) to a clean
+extract of the base commit, and the resulting src/pytket_dqc/ tree is
+byte-identical to the fork at 5a28ad6.
 
 The demo notebook (basic_usage_demo.ipynb) is shipped as a full file
 rather than a diff: it is derived from examples/basic_usage.ipynb with

@@ -79,7 +79,9 @@ commit the patch was generated against, and the reproduction steps.
   paper's results were produced. That branch continues past this commit with
   further, post-paper work.
 - **pytket-dqc**: `bfa0b4eff5b77d0a9b3c260c7842e57e75091796` (a clean pin at
-  `origin/main`'s tip, no upstream drift).
+  `origin/main`'s tip, no upstream drift), diffed against
+  [`5a28ad6`](https://github.com/kaiuki2000/pytket-dqc/tree/5a28ad66581b1008e32b8cd74688b8c6a3383888)
+  on the fork, restricted to `src/pytket_dqc/`.
 
 Both have been verified to apply cleanly (`git apply --check`) against a fresh
 worktree at their pinned base commit. But applying a patch is one step of a
@@ -98,12 +100,14 @@ or from an older version of a doc** — follow `docs/INSTALL.md` or
   forks (personal env/tooling files, CI workflow edits, notebook execution
   outputs) stays out. Two deliberate exclusions already in place: the fork's own
   GitHub Pages docs-deploy workflow removal, and notebook cell outputs. One
-  known exception survives: the debug `print()`/`perf_counter` instrumentation
-  in the pytket-dqc patch's `allocators/hypergraph_partitioning.py`, which is
-  that file's *only* content. It is documented in `MODIFICATIONS.md`; if the
-  patch is ever regenerated, dropping it is the obvious cleanup, but that
-  changes the state the paper's results were produced from, so it is a decision
-  to raise rather than make.
+  known exception survives: the debug `print()`/`perf_counter` instrumentation in
+  three files of the pytket-dqc patch —
+  `allocators/hypergraph_partitioning.py`, `distributors/cover_embedding.py`
+  and `distributors/partitioning_heterogeneous.py` — which is those files'
+  *only* content. It is documented in `MODIFICATIONS.md`; dropping it is the
+  obvious cleanup, but it changes the state the paper's results were produced
+  from (and it is where the paper's pytket-dqc runtime breakdown came from), so
+  it is a decision to raise rather than make.
 - **Don't rename `qig-partitioning/` to match its import name
   `qig_partitioning`.** The hyphen/underscore mismatch is deliberate; naming
   them identically silently breaks `import qig_partitioning` from the repo root.

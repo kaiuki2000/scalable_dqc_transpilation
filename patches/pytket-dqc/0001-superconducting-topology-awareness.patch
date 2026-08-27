@@ -1443,6 +1443,59 @@ index b536af0..9f61cb8 100644
 +def remove_barriers(circ) -> Circuit:
 +    return clean_circuit(circ, remove_barriers=True)
 \ No newline at end of file
+diff --git a/src/pytket_dqc/distributors/cover_embedding.py b/src/pytket_dqc/distributors/cover_embedding.py
+index e06fadf..4023448 100644
+--- a/src/pytket_dqc/distributors/cover_embedding.py
++++ b/src/pytket_dqc/distributors/cover_embedding.py
+@@ -27,6 +27,7 @@ from pytket_dqc.refiners import (
+     DetachedGates,
+ )
+ 
++from time import perf_counter
+ 
+ class CoverEmbedding(Distributor):
+     """Distributor applying :class:`.VertexCover` refinement to an
+@@ -58,7 +59,11 @@ class CoverEmbedding(Distributor):
+             "initial_distributor", PartitioningHeterogeneous()
+         )
+         distribution = initial_distributor.distribute(circ, network, **kwargs)
++        print("Initial distribution complete. Starting VertexCover refinement...")
++        t_0 = perf_counter()
+         VertexCover().refine(distribution, **kwargs)
++        dt_refine = perf_counter() - t_0
++        print(f"VertexCover refinement complete. Time taken = {dt_refine:.4f}s")
+ 
+         return distribution
+ 
+diff --git a/src/pytket_dqc/distributors/partitioning_heterogeneous.py b/src/pytket_dqc/distributors/partitioning_heterogeneous.py
+index e1fc123..25c7e7b 100644
+--- a/src/pytket_dqc/distributors/partitioning_heterogeneous.py
++++ b/src/pytket_dqc/distributors/partitioning_heterogeneous.py
+@@ -21,7 +21,7 @@ from pytket_dqc.refiners import (
+ )
+ from pytket_dqc.allocators import HypergraphPartitioning, Annealing
+ from pytket import Circuit
+-
++from time import perf_counter
+ 
+ class PartitioningAnnealing(Distributor):
+     """Distributor using the :class:`.Annealing` allocator."""
+@@ -65,9 +65,15 @@ class PartitioningHeterogeneous(Distributor):
+         :rtype: Distribution
+         """
+ 
++        t_0 = perf_counter()
++        print("     Starting initial partitioning...") # Debugging print
+         distribution = HypergraphPartitioning().allocate(circ, network, **kwargs)
++        print(f"     Initial partitioning completed in {perf_counter() - t_0:.2f} seconds.") # Debugging print
++        t_1 = perf_counter()
+         refiner = BoundaryReallocation()
++        print("     Starting boundary reallocation...") # Debugging print
+         refiner.refine(distribution, **kwargs)
++        print(f"     Boundary reallocation completed in {perf_counter() - t_1:.2f} seconds.") # Debugging print
+ 
+         return distribution
+ 
 diff --git a/src/pytket_dqc/networks/nisq_network.py b/src/pytket_dqc/networks/nisq_network.py
 index d4a1b9f..abf2c8a 100644
 --- a/src/pytket_dqc/networks/nisq_network.py
@@ -1525,3 +1578,57 @@ index 7e999e1..94cec5d 100644
      assert starting_count == ending_count
  
      return starting_count + telep_count
+diff --git a/src/pytket_dqc/utils/verification.py b/src/pytket_dqc/utils/verification.py
+index fd8cec9..60c844e 100644
+--- a/src/pytket_dqc/utils/verification.py
++++ b/src/pytket_dqc/utils/verification.py
+@@ -21,7 +21,7 @@ from .gateset import is_start_proc, is_end_proc
+ 
+ 
+ def check_equivalence(
+-    circ1: Circuit, circ2: Circuit, qubit_mapping: dict[Qubit, Qubit]
++    circ1: Circuit, circ2: Circuit, qubit_mapping: dict[Qubit, Qubit], distributed_comparison: bool = False
+ ) -> bool:
+     """
+     Use PyZX to check the two circuits are equivalent. This is done by
+@@ -50,6 +50,8 @@ def check_equivalence(
+         `circ2`. If a qubit is not included in this dictionary it means that
+         it ought to be treated as an ancilla (i.e. prepared and measured).
+     :type qubit_mapping: dict[Qubit, Qubit]
++    :param distributed_comparison: Use this when `circ1` and `circ2` are distributed circuits.
++    :type distributed_comparison: bool
+ 
+     :return: Whether the circuits are proven to be equivalent.
+     :rtype: bool
+@@ -64,8 +66,12 @@ def check_equivalence(
+     if len(list(set(qubits2))) != len(qubits2):
+         raise Exception("The qubit mapping must be 1-to-1.")
+ 
+-    zx1 = to_pyzx(circ1, qubits1)
+-    zx2 = to_pyzx(circ2, qubits2)
++    if distributed_comparison: # When comparing 2 distributed circuits, we should use the top-branch.
++        zx1 = to_pyzx(circ1, qubits2)
++        zx2 = to_pyzx(circ2, qubits2)
++    else:
++        zx1 = to_pyzx(circ1, qubits1)
++        zx2 = to_pyzx(circ2, qubits2)
+ 
+     # Compose the adjoint of zx1 with zx2 and simplify
+     g = zx1.adjoint()
+@@ -119,6 +125,7 @@ def to_pyzx(circuit: Circuit, mask: list[Qubit]) -> zx.graph.base.BaseGraph:
+     # Create the body of the circuit by rebasing every CustomGate
+     the_circ = Circuit(len(mask) + n_ebits)
+     for command in circuit.get_commands():
++        # print(command) # Debugging
+         if command.op.type == OpType.CustomGate:
+             if is_start_proc(command):
+                 # Identify the qubit to share and create a new ancilla qubit
+@@ -156,6 +163,8 @@ def to_pyzx(circuit: Circuit, mask: list[Qubit]) -> zx.graph.base.BaseGraph:
+                 raise Exception(f"CustomGate {command.op.get_name()} not supported!")
+         else:
+             if not all(q in qubit_dict.keys() for q in command.qubits):
++                # print(qubit_dict.keys()) # Debugging
++                # print(command.qubits) # Debugging
+                 raise Exception("Attempting to act on a discarded qubit")
+             qubits = [qubit_dict[q] for q in command.qubits]
+             the_circ.add_gate(command.op, qubits)

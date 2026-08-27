@@ -102,7 +102,14 @@ and `benchmarks/dense/` to restore the full suites.
 ## Running them
 
 The scripts need the full environment from the repository root README (both
-patched forks plus `qig-partitioning`). From an activated environment:
+patched forks plus `qig-partitioning`). The **patched** pytket-dqc in
+particular is not optional: the `*_hypergraph.py` scripts call
+`check_equivalence(..., distributed_comparison=True)`, a parameter this repo's
+pytket-dqc patch adds. Against a stock pytket-dqc they raise `TypeError`
+partway through the pytket-dqc path, and the surrounding `except Exception`
+discards that seed's results for *all four* methods, not just pytket-dqc.
+
+From an activated environment:
 
 ```bash
 python examples/three_square_architecture/cz_frac_hypergraph.py
