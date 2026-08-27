@@ -248,6 +248,22 @@ checkout — and local paths are stripped by the `grep -v` filter above, so
 building from the submission freeze would silently omit `pytket-qiskit`
 entirely, which the Section V-B hybrid approach needs.
 
+**Why both files are kept.** They are not near-duplicates: of the 148 packages
+they share, **54 differ in version**, and the differences are not confined to
+tooling. `networkx` is 3.6.1 in the submission environment and 3.5 in the
+build environment — and pytket-dqc's Steiner-tree and shortest-path code, which
+this repo's patch modifies, runs on networkx. `scipy` (1.16.3 → 1.16.2),
+`pandas` (2.3.3 → 3.0.3) and `scikit-learn` (1.8.0 → 1.9.0) also differ.
+`qiskit`, `pytket` (2.10.3), `numpy` (2.2.6) and `rustworkx` (0.17.1) match.
+The submission freeze additionally carries a Sphinx docs stack and
+`openqasm3`/`qiskit-qasm3-import` that the build environment does not.
+
+So the second file is not redundant reassurance — it is the only record of the
+exact dependency set behind the numbers in `docs/RESULTS.md`, and it cannot be
+reconstructed from the other. It stays for provenance, is 3.5 KB, and nothing
+reads it; the rename and these headers exist so it cannot be mistaken for the
+one to install from.
+
 Neither file lists `kahypar`, for the `dist-info` reason given earlier.
 
 ## What the build-time checks actually prove

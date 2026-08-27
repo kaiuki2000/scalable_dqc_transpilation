@@ -139,13 +139,16 @@ commit and how the patch was generated.
 
 ## Not reproduced here
 
-The paper's §V-B hybrid approach pairs pytket-dqc's existing
-`PartitioningHeterogeneous`/`CoverEmbedding` allocators with CLA-SABRE for
-initial mapping. The environment above installs everything it needs (including
-`pytket-qiskit`), but the orchestration script itself isn't part of this repo —
-it's built on functionality already present upstream in both forks and lives
-inside neither patch. See [`MODIFICATIONS.md`](MODIFICATIONS.md) for the full
-accounting.
+The patches provide the primitives the paper's method needs. The scripts that
+compose them into the paper's evaluated pipelines are not part of this
+artifact, and three pieces of the method live in those scripts rather than in
+either fork: the §V-B hybrid orchestration, the aggregated-cost trial selection
+of §IV-B, and the pseudo-sink subcircuit generation of §V-A (whose SABRE-side
+penalty *is* in the Qiskit patch, but whose sink insertion and Table I edge
+weights are not).
+
+[`MODIFICATIONS.md`](MODIFICATIONS.md) accounts for each of these against the
+paper's own text.
 
 ## License
 

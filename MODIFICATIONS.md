@@ -8,6 +8,10 @@ Superconducting Quantum Architectures,"* Azenha, Polian & Brandhofer). It's
 meant to be read, not applied — see `docs/INSTALL.md` for how to apply the
 real patches to a working checkout, or `README.md` for the Docker route.
 
+Where the code and the paper diverge, this document says so rather than
+paraphrasing the paper: see "Rough edges worth knowing about", "Two traps
+in this patch", and "Not part of these patches or this repo".
+
 ## Qiskit: three DQC-aware SABRE variants (paper §IV)
 
 The paper introduces three named SABRE variants, each building on the
@@ -47,6 +51,21 @@ DQC setting:
 - `PyRoutingTarget` (`route.rs`) gains a `set_distance_matrix` method,
   letting a distance matrix be swapped onto an already-constructed
   routing target directly from Python.
+- **`SabreLayout`'s decay term is disabled.** Its hardcoded heuristic loses
+  the `.with_decay(0.001, 5)` stage upstream applies:
+
+  ```python
+  # qiskit/transpiler/passes/layout/sabre_layout.py
+  .with_lookahead(0.5, self.extended_set_length, SetScaling.Size)
+  # .with_decay(0.001, 5)
+  ```
+
+  Decay is SABRE's mechanism for discouraging repeated use of the same
+  qubits, so this is a real change in routing behaviour, not a cleanup. It
+  is asymmetric: `SabreSwap`'s `"decay"` heuristic still applies decay, and
+  only `SabreLayout`'s internal heuristic loses it. The paper does not
+  discuss it, so treat it as an undocumented experimental choice rather
+  than a described contribution.
 
 The paper calls the variant that uses *only* this infrastructure — no
 custom distance weights, no cost-function changes — "Default SABRE": *"all
@@ -56,7 +75,28 @@ our conjoined coupling map and modified layout selection criteria...
 underlying DQC adaptations but otherwise retains standard SABRE routing
 logic."*
 
-### (1,10) SABRE — distance-matrix customization (paper §IV-B, Table I)
+One caution on reading that quote against this patch. The paper's
+*"modified layout selection criteria"* refers specifically to §IV-B's
+change of **which trial wins**: *"while standard parallel SABRE trials
+select the run with the fewest SWAP gates inserted, we instead prioritize
+the lowest aggregated cost"* \(C_{agg}\) (Eq. 1). That selection is **not in
+this patch** — `swap_map` still picks the best trial by raw SWAP count,
+unchanged from upstream:
+
+```rust
+// crates/transpiler/src/passes/sabre/route.rs — unmodified by this patch
+.min_by_key(|(index, result)| (result.swap_count(), *index))
+```
+
+This is still true at the fork's current HEAD, and no aggregated-cost
+computation exists anywhere in its Rust core or transpiler Python. The
+\(C_{agg}\) comparison is therefore done outside the fork, in the
+experiment orchestration that runs SABRE and scores the results — see
+"Not part of these patches or this repo" below. The `num_random_trials`
+gate above is a different change (which layouts get *seeded*, not which
+result gets *chosen*), and the two should not be read as the same thing.
+
+### (1,10) SABRE — distance-matrix customization (paper §IV-B)
 
 Rather than let SABRE's cost function derive distances purely from the
 conjoined coupling map's native (all-edges-equal) topology, the distance
@@ -149,7 +189,36 @@ if self.penalized_swaps.contains(&sorted_swap) {
 The `is_real_mqpu == false` branch is what lets the same modified SABRE
 also serve as the underlying router pytket-dqc's subcircuit routing calls
 into (§V-A) — a simpler flat-penalty "virtual sink" mode, distinct from
-CLA-SABRE's full distance-aware scoring used on the Qiskit side.
+CLA-SABRE's full distance-aware scoring used on the Qiskit side. In the
+paper's terms, those "virtual sinks" are the **pseudo-sink qubits** of
+Fig. 1 and §V-A, and this branch is the *"explicit heuristic penalty
+against SWAPs involving pseudo-sinks"* described there. Note that only the
+*penalty* lives here; the machinery that creates the sinks is not in either
+patch (see "Not part of these patches or this repo").
+
+### Rough edges worth knowing about
+
+These are in the patch as shipped; they're recorded here rather than
+silently fixed, because this patch is meant to reproduce the state the
+paper's results were produced from.
+
+- **`SabreSwap(coupling_map=None)` now raises at construction.** Upstream
+  deliberately sets `self.target = None` there, with the comment *"this is
+  an invalid state, but we defer the error to runtime to match historical
+  behaviour of Qiskit."* The patch moves routing-target construction into
+  `__init__` and calls `RoutingTarget.from_target(self.target)`
+  unconditionally, and that PyO3 signature takes a non-optional `&Target`
+  — so the deferred error becomes an immediate `TypeError`. Read from the
+  source rather than executed, since no built environment was to hand.
+- The `alpha`/`beta` docstrings added to both passes describe `beta` as a
+  *"fractional penalty per inter-QPU SWAP distance"*; it is actually a
+  dampening divisor on the partial-move reward (`α/(3β)` per unit of
+  distance change). `inter_qpu_coupling_map` is annotated
+  `// Implementation pending`, though it is implemented directly below the
+  annotation.
+- Both Rust files carry a large volume of commented-out `eprintln!` debug
+  scaffolding. It is inert, and left in place for the same
+  reproduce-the-original-state reason.
 
 ## pytket-dqc: superconducting hardware adaptation (paper §V-A)
 
@@ -192,12 +261,92 @@ if current_usage >= capacity:
     )
 ```
 
+That capacity check is the visible half. The mechanism that actually
+implements the paper's *"locking the link until the multi-gate
+teleportation primitive is fully resolved"* is a rewrite of how link
+qubits are booked and released, and it is worth spelling out, because it
+is where the per-link model differs from upstream in substance rather than
+in bookkeeping.
+
+**Link qubits are now booked against an edge, and the edge stays booked
+until the primitive unwinds.** `_request_link_qubit` gains a
+`peer_server` argument, records `qubit_peer_map[qubit] = peer_server`, and
+increments `active_links[edge_key]`. `_release_link_qubit` looks the peer
+back up and decrements the same counter. So occupancy is held on the
+specific physical link for the whole lifetime of the link qubit, rather
+than being a count of how many link qubits a module happens to hold.
+
+**Ending processes now unwind hop by hop.** Upstream `end_links` ends
+every target directly against the hyperedge's home link qubit, in whatever
+order `targets` arrived in:
+
+```python
+# upstream
+for target in targets:
+    target_link = self.get_link_qubit(target)
+    ending_actions.append(EjppAction(from_qubit=target_link, to_qubit=home_link))
+```
+
+The patched version ends each target against **its own peer** — the
+neighbour it was entangled from — and sorts targets by their depth along
+the entanglement-swapping chain, deepest first:
+
+```python
+valid_targets.sort(key=lambda t: (get_depth(t), t), reverse=True)
+for target in valid_targets:
+    peer_server = self.qubit_peer_map.get(target_link, <home server>)
+    peer_link = self.get_link_qubit(peer_server)
+    ending_actions.append(EjppAction(target_link, peer_link))
+```
+
+Under all-to-all intra-core connectivity the two are equivalent, since any
+link qubit can talk to any other. Under the restricted connectivity the
+paper targets, they are not: a multi-hop chain has to be torn down from
+the far end inward, releasing each physical link only once the hop beyond
+it is finished. Correspondingly, `start_link` now advances
+`source = next_server` as it walks the path, so each hop's `peer_server`
+is the previous hop rather than the original source.
+
+### Two traps in this patch
+
+Both are consequences of the per-server → per-link switch, and neither
+fails loudly.
+
+- **`server_ebit_mem` is no longer enforced anywhere in
+  `to_pytket_circuit`.** The old per-server check
+  (`server_ebit_mem[server] <= len(self.occupied[server])`) is gone, fully
+  replaced by the per-edge check above. Because unknown edges default to
+  `float("inf")`, a network built the upstream way — `server_ebit_mem` set,
+  `server_link_capacities` omitted — now runs with **no communication
+  bound at all**, silently, rather than raising `ConstraintException`. If
+  you are porting an upstream script, you must supply
+  `server_link_capacities`; the field is still accepted, still stored, and
+  still checked by `can_implement`, which makes the omission easy to miss.
+- **`NISQNetwork` does not round-trip through `to_dict`/`from_dict`.**
+  `to_dict` serialises the new field with stringified tuple keys, but
+  `from_dict` never parses it back — it carries only a comment saying that
+  parsing *"would be needed here"*. Since `__eq__` was also extended to
+  compare `server_link_capacities`, `NISQNetwork.from_dict(n.to_dict())`
+  both loses every capacity and compares unequal to `n` whenever any
+  capacity is set.
+
 ## Also bundled in (not the headline contribution, but part of the same patch)
 
 - **Steiner-tree and shortest-path memoization** in `Distribution`
   (`_get_steiner_tree`, `_get_tree_shortest_path`) — these recomputations
   are NP-hard and were previously redone on every call; caching them by a
-  sorted-server key was a meaningful speedup on larger circuits.
+  sorted-server key was a meaningful speedup on larger circuits. Two
+  details of the cache are load-bearing. `_get_tree_shortest_path` returns
+  `list(...)`, a copy, because `start_link` calls `.pop(0)` on the result
+  and would otherwise corrupt the cached entry. And its key is
+  `(id(tree), source, target)` — an object identity, not a value. That is
+  safe for trees `_get_steiner_tree` produced, since `_steiner_cache`
+  keeps them alive for the life of the `Distribution` and their ids stay
+  unique; it is *not* safe for a `tree` passed in by a caller (the
+  optional `tree` argument), which nothing retains, so a garbage-collected
+  tree could have its address reused and return another tree's cached
+  path. Nothing in this repo exercises that path, but it is a genuine
+  hazard if the caller-supplied `tree` argument is ever used in a loop.
 - **A determinism fix**: candidate servers are now iterated in sorted
   order (`for c_server in sorted(connected_servers)`) rather than in
   whatever order a Python `set` happens to produce, so two runs on the
@@ -208,7 +357,26 @@ if current_usage >= capacity:
   the original circuit; that's now opt-in, since it's expensive and was a
   significant fraction of total runtime on larger circuits during
   experiments. Worth turning back on (`verify_equivalence=True`) when
-  correctness, not throughput, is what you're checking.
+  correctness, not throughput, is what you're checking. Note this is the
+  only one of these bundled changes that weakens a correctness guarantee:
+  the `all_cu1_local` assertion next to it is still unconditional, but
+  equivalence to the original circuit is not checked by default.
+- **`fast_get_server_id`**, an `lru_cache`d wrapper around
+  `get_server_id`, plus `is_robust_start_proc`/`is_robust_end_proc` and
+  `clean_circuit`. The two `is_robust_*` helpers identify EJPP processes by
+  substring-matching `str(op)`/`repr(op)` inside a bare `except: pass`,
+  which will silently answer `False` rather than fail if pytket ever
+  changes how these custom gates render — worth knowing if start/end
+  process accounting ever looks wrong.
+- **Debug instrumentation in `allocators/hypergraph_partitioning.py`.**
+  This file is listed among those the patch touches, but it contains *no*
+  algorithmic change: the hunks add five unconditional `print()` calls and
+  `perf_counter` timings around `HypergraphCircuit` construction,
+  `initial_distribute` and `make_valid`. They are useful for reproducing
+  the paper's runtime breakdown, but they print to stdout from library
+  code on every allocation, and by this repo's own rule (keep patches
+  scoped to the algorithmic contribution) they are the one piece of
+  repo-local noise that survived into a shipped patch.
 
 ## QIG partitioning (paper §V-C): `qig-partitioning/`
 
@@ -251,9 +419,41 @@ for one of the three SABRE variants (see `notebooks/usage_demo.ipynb`).
 
 ## Not part of these patches or this repo
 
-The paper's evaluation also covers a **hybrid** approach that uses
+Three pieces of the paper's method are described in the text but are not
+found in either patch. They are listed here so the mapping from paper to
+code stays honest.
+
+**The pseudo-sink subcircuit-generation machinery (§V-A, Table I,
+Fig. 1).** The paper describes *two* modifications to pytket-dqc. The
+first — strict physical link tracking — is in the patch, above. The
+second is not: *"the second modification introduces explicit subcircuit
+generation for each core,"* using auxiliary **pseudo-sink qubits** and
+**routing placeholders** (dummy two-qubit gates) to force virtual qubits
+into the communication zone, with the hierarchical coupling-map edge
+weights of Table I (`10^9` computational↔computational down to `10^0`
+pseudo-sink↔link) applied before the distance matrix is computed. Nothing
+in `patches/pytket-dqc/` mentions sinks, placeholders or those weights —
+the string "sink" does not appear in the patch at all. What *is* here is
+the SABRE-side half of it: the flat-`α` "virtual sink" penalty branch in
+`route.rs` described earlier, which penalises SWAPs involving sinks once
+something else has created them. Sink insertion, placeholder insertion,
+edge-weight assignment and per-core subcircuit generation live in the
+experiment orchestration, outside both forks.
+
+**Aggregated-cost trial selection (§IV-B, Eq. 1).** As detailed under
+"Default SABRE" above, the fork still selects the best routing trial by
+raw SWAP count. Choosing by \(C_{agg} = 10 \times N_{EPR} +
+N_{local\,SWAP}\) is done outside the fork.
+
+**The §V-B hybrid orchestration.** The paper's hybrid approach uses
 pytket-dqc's existing `PartitioningHeterogeneous`/`CoverEmbedding`
-allocators purely for initial mapping before handing off to CLA-SABRE
-(§V-B). That's orchestration built on top of the pytket-dqc patch, using
+allocators purely for initial mapping before handing off to CLA-SABRE.
+That's orchestration built on top of the pytket-dqc patch, using
 pytket-dqc functionality that already exists upstream — it doesn't live
 inside the patch, and isn't reproduced by this repo.
+
+What all three have in common is that they are *callers* of the patched
+code rather than changes to it. The patches provide the primitives the
+paper needs (per-link capacity, a pluggable distance matrix, the CLA cost
+terms, the sink penalty); the scripts that compose them into the paper's
+five evaluated pipelines are not part of this artifact.
