@@ -10,3 +10,7 @@ dist
 .ipynb_checkpoints
 .venv
 venv
+docs
+figures
+notebooks/.ipynb_checkpoints
+*.tex
