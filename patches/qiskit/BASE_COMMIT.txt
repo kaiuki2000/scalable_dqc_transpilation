@@ -11,16 +11,14 @@ The patch in this directory is generated as the diff between the above
 base commit and:
 
   c62ce9982a7bf7764072ea89296077db4583b679
-  https://github.com/kaiuki2000/qiskit/tree/c62ce9982a7bf7764072ea89296077db4583b679
 
-That commit is on the fork's `exponential_decay` branch (which also
-contains later, post-paper work) and represents the code as it stood
-when this paper's results were produced. It implements the three
+That commit is on a private development fork and represents the code as
+it stood when this paper's results were produced. It implements the three
 DQC-aware SABRE variants described in Section IV of the paper --
 Default SABRE, (1,10) SABRE, and CLA-SABRE -- see MODIFICATIONS.md for
-how each maps to the code. Later commits on that branch continue
-development on the same cost function (e.g. an exponential-decay-weighted,
-depth-aware variant) but are not part of what's reproduced by this patch.
+how each maps to the code. The patch in this directory is self-contained:
+applying it to the upstream base commit above reproduces that state
+without access to the fork.
 
 To reproduce the base checkout:
   git clone https://github.com/Qiskit/qiskit.git

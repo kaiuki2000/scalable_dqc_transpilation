@@ -1,10 +1,23 @@
 # Native setup
 
-Building the environment directly on your machine, without Docker.
+Building the environment directly on your machine, without Docker. Use this if
+you'd rather not run a container, or want the checkouts editable on your own
+filesystem; otherwise the README's Docker route does the same thing in one
+command.
 
-The Docker image in the README is the recommended path and the one with the
-most verification behind it. Use this if you'd rather not run a container, or
-want the checkouts editable on your own filesystem.
+## The shape of it
+
+Six steps, about an hour on a modern machine, most of it compilation:
+
+| Step | Produces | Roughly |
+| --- | --- | ---: |
+| 0. Prerequisites | system packages, Python 3.12 venv, Rust toolchain | 5 min |
+| 1. KaHyPar 1.3.2 from source | `kahypar*.so` in `site-packages` | 10–15 min |
+| 2. The frozen environment | every pinned dependency, plus a stock Qiskit | 5 min |
+| 3. Patched Qiskit | the DQC-aware SABRE variants, Rust built in release | 20–30 min |
+| 4. Patched pytket-dqc | per-link capacity, `distributed_comparison` | 2 min |
+| 5. `qig-partitioning` | `import qig_partitioning` | seconds |
+| 6. Check it works | two import checks and a real partitioning call | 1 min |
 
 **Order matters.** Each step exists to avoid a specific failure — the short
 reason is inline, the full explanation is in
@@ -74,7 +87,7 @@ different hardware than it was built on, also see the
 [`-march=native` note](BUILD-NOTES.md#two-more-kahypar-build-hazards-cmake-4-and--marchnative).
 
 KaHyPar won't show up in `pip freeze` afterwards — the `.so` is copied by hand
-and carries no `dist-info`. That's expected.
+and carries no `dist-info`. Expected.
 
 ## 2. Install the frozen environment
 
@@ -152,8 +165,8 @@ pip install --no-deps -e "$REPO/qig-partitioning"
 
 `--no-deps` matters:
 [a plain install would clobber the KaHyPar you built in step 1](BUILD-NOTES.md#why-qig-partitioning-installs-with---no-deps).
-Its other dependencies are already present. (Installing `qig-partitioning`
-*standalone*, outside this environment, a plain `pip install -e` is correct.)
+Its other dependencies are already present. Installing `qig-partitioning`
+*standalone*, outside this environment, a plain `pip install -e` is correct.
 
 ## 6. Check it works
 
@@ -168,5 +181,5 @@ distribution. Imports alone don't rule out the broken-wheel failure from step 1,
 since it only surfaces at partition time. `notebooks/usage_demo.ipynb` exercises
 the full pipeline.
 
-See [`BUILD-NOTES.md`](BUILD-NOTES.md#verification-status) for what has and
-hasn't been verified on this path.
+[`BUILD-NOTES.md`](BUILD-NOTES.md#verification-status) records what has been
+exercised on this path.

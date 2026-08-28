@@ -12,6 +12,10 @@ This is independent of both patched forks in this repo -- it only needs
 Qiskit (to read the circuit), NumPy, and KaHyPar's Python bindings -- so
 it ships here as an ordinary importable package rather than as a patch.
 
+Cores are assumed to be equally sized, as they are in the paper's
+architectures: one `max_capacity` applies to all of them, and the KaHyPar
+call asks for near-equal blocks.
+
 Two post-processing steps are then applied, matching the paper's own
 description (Section V-A) of adapting KaHyPar's output to a fixed,
 per-core hardware capacity:
@@ -162,10 +166,10 @@ def enforce_strict_capacity(
     core_cost_matrix: dict[Any, dict[Any, float]],
     max_capacity: int,
 ) -> dict[int, Any]:
-    """Force any core over `max_capacity` to eject qubits to under-full
-    cores, always choosing the qubit/target pair with the smallest
-    resulting increase in communication cost. Mutates and returns
-    `assignment`.
+    """Force any core holding more than `max_capacity` qubits to eject
+    qubits to under-full cores, always choosing the qubit/target pair with
+    the smallest resulting increase in communication cost. `max_capacity`
+    is a per-core qubit count. Mutates and returns `assignment`.
     """
     core_counts = {core: sum(1 for c in assignment.values() if c == core) for core in core_cost_matrix}
 
@@ -215,9 +219,9 @@ def boundary_reallocation(
     max_capacity: int,
     max_iters: int = 100,
 ) -> dict[int, Any]:
-    """Iteratively move boundary qubits to a neighboring, under-full core
-    whenever doing so strictly reduces communication cost. Mutates and
-    returns `assignment`.
+    """Iteratively move boundary qubits to a neighboring core that is under
+    its per-core `max_capacity`, whenever doing so strictly reduces
+    communication cost. Mutates and returns `assignment`.
     """
     core_counts = {core: sum(1 for c in assignment.values() if c == core) for core in core_cost_matrix}
 
@@ -260,9 +264,16 @@ def get_heterogeneous_core_assignment(
 
     `core_cost_matrix` is a `{core: {other_core: cost}}` mapping (cost 0
     on the diagonal); it need not be uniform, so restricted/non-all-to-all
-    inter-core topologies are supported directly. If `max_capacity` is
-    `None`, cores are treated as having unlimited capacity and no
-    capacity post-processing is applied.
+    inter-core topologies are supported directly.
+
+    `max_capacity` is the maximum number of qubits **per core**, not a
+    total across all cores, and the same limit applies to every core --
+    cores of differing sizes are not currently supported. If it is `None`,
+    cores are treated as having unlimited capacity and no capacity
+    post-processing is applied.
+
+    "Heterogeneous" here refers to the inter-core *topology*, not to core
+    sizes.
 
     Returns a mapping from each circuit qubit to its assigned core.
     """

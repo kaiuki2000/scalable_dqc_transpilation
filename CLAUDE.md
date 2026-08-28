@@ -7,7 +7,7 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 Companion artifact for *"Scalable Transpilation for Overcoming Restricted
 Connectivity in Distributed Superconducting Quantum Architectures"* (Azenha,
 Polian & Brandhofer — QCE26 submission; full draft in
-`Paper_draft_portrait.pdf`). It ships small, self-contained patches against
+`paper.pdf`). It ships small, self-contained patches against
 pinned upstream commits of two forked projects (Qiskit and pytket-dqc), so the
 changes under study can be reviewed in isolation without vendoring the full
 forks, plus one standalone Python package (`qig-partitioning/`) for the one
@@ -73,15 +73,12 @@ commit the patch was generated against, and the reproduction steps.
 
 - **Qiskit**: `848178940d2def0dbdee578d20ce5e6b3451f4c2` (tag `2.2.0rc1` —
   **not** the same commit as the final `2.2.0` release tag; the patch will not
-  apply cleanly on top of `2.2.0`). Diffed against
-  [`c62ce998`](https://github.com/kaiuki2000/qiskit/tree/c62ce9982a7bf7764072ea89296077db4583b679)
-  on the fork's `exponential_decay` branch — the state of the code when the
-  paper's results were produced. That branch continues past this commit with
-  further, post-paper work.
+  apply cleanly on top of `2.2.0`). Diffed against commit `c62ce998` of a
+  private development fork — the state of the code when the paper's results
+  were produced.
 - **pytket-dqc**: `bfa0b4eff5b77d0a9b3c260c7842e57e75091796` (a clean pin at
-  `origin/main`'s tip, no upstream drift), diffed against
-  [`5a28ad6`](https://github.com/kaiuki2000/pytket-dqc/tree/5a28ad66581b1008e32b8cd74688b8c6a3383888)
-  on the fork, restricted to `src/pytket_dqc/`.
+  `origin/main`'s tip, no upstream drift), diffed against commit `5a28ad6` of
+  a private development fork, restricted to `src/pytket_dqc/`.
 
 Both have been verified to apply cleanly (`git apply --check`) against a fresh
 worktree at their pinned base commit. But applying a patch is one step of a
@@ -112,14 +109,16 @@ or from an older version of a doc** — follow `docs/INSTALL.md` or
   `qig_partitioning`.** The hyphen/underscore mismatch is deliberate; naming
   them identically silently breaks `import qig_partitioning` from the repo root.
   See `docs/BUILD-NOTES.md`.
-- The full forks these patches derive from live outside this repository. Don't
-  assume their source files are available locally when reasoning about this repo
-  in isolation.
+- The full forks these patches derive from are private and live outside this
+  repository. Don't assume their source files are available locally when
+  reasoning about this repo in isolation, and don't add links to them in
+  user-facing docs — they resolve for nobody. Bare commit SHAs are fine as
+  provenance.
 
 ## The `examples/` scripts are reproduction artifacts
 
-They are the experiment scripts as they were run, taken verbatim from
-`kaiuki2000/mqpu-ustutt-ibm` at `48dbc57`, with exactly five recorded
+They are the experiment scripts as they were run, taken verbatim from a
+private experiment repository at `48dbc57`, with exactly five recorded
 deviations listed in `examples/README.md`. Treat them the way the patches are
 treated: **do not refactor, tidy, deduplicate or lint them.** Their dead
 imports, shadowed names, commented-out debugging and near-duplicate structure

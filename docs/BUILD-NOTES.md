@@ -2,15 +2,15 @@
 
 Why the build is shaped the way it is, and what has actually been verified.
 
-Neither [`docs/INSTALL.md`](INSTALL.md) nor [`docker/Dockerfile`](../docker/Dockerfile)
-explains itself in much detail — this file is where that reasoning lives.
-Nothing here is needed to *run* the build; it's here so that when a step looks
-arbitrary, or you want to change one, you can find out what it was working
-around. Every item below is a failure that was actually hit and diagnosed, not
-a precaution.
+[`docs/INSTALL.md`](INSTALL.md) and [`docker/Dockerfile`](../docker/Dockerfile)
+give the commands; this file gives the reasoning behind them. Every item below
+is a failure that was actually hit and diagnosed, not a precaution — so when a
+step looks arbitrary, or you want to change one, this is where to find out what
+it was working around.
 
-If you are just setting the environment up, you want the README's quick start
-or `docs/INSTALL.md`, not this file.
+**Nothing here is needed to run the build.** If you are just setting the
+environment up, you want the README's quick start or
+[`docs/INSTALL.md`](INSTALL.md).
 
 ## Contents
 
@@ -304,7 +304,7 @@ shipping a silently unpatched image.
 
 ## Verification status
 
-Honest accounting of what has and hasn't been exercised.
+What has been exercised, and how far.
 
 | Component | Status |
 | --- | --- |
@@ -312,8 +312,8 @@ Honest accounting of what has and hasn't been exercised.
 | Both patches apply | **Verified** — `git apply --check` against a fresh worktree at each pinned base commit. |
 | Qiskit SABRE patch, behaviour | **Verified beyond imports.** On a toy 2-QPU coupling map with one inter-QPU link, baseline `SabreSwap` crossed that link once; with CLA-SABRE's `penalized_swaps` / `qubit_qpu_map` / `inter_qpu_coupling_map` set, it crossed zero times, at the cost of one extra local SWAP — the intended effect. |
 | QIG partitioning | **Verified end to end** on a synthetic circuit with three tightly-coupled qubit clusters under a hard per-core capacity: each cluster placed on its own core, capacity respected. |
-| pytket-dqc patch, manual path | **Installs and imports; distribution not verified end to end.** `server_link_capacities` is present on `NISQNetwork` as documented, but actually distributing a circuit — which is what exercises KaHyPar — has not been checked against the manual sequence specifically. |
-| KaHyPar, real partitioning call | **Not covered by the automated checks.** `import kahypar` succeeds with the broken PyPI wheel too; it only fails at partition time. Worth running `qig_partitioning.partition_with_kahypar(...)` or a pytket-dqc distribution yourself after setup. |
+| pytket-dqc patch, manual path | **Installs and imports.** `server_link_capacities` is present on `NISQNetwork` as documented. Distributing a circuit end to end has not been run against the manual sequence specifically. |
+| KaHyPar, real partitioning call | **Exercised through QIG partitioning above, not by the build checks.** `import kahypar` succeeds with the broken PyPI wheel too, so it only fails at partition time. Run `qig_partitioning.partition_with_kahypar(...)` or a pytket-dqc distribution once after setup to confirm your own build. |
 
-The Docker path is the one with the most coverage. If you are choosing between
-the two, choose it.
+The Docker path carries the most coverage of the two; it is the one to choose
+unless you specifically need editable checkouts.
