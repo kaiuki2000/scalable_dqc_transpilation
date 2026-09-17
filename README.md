@@ -2,10 +2,22 @@
 
 Companion artifact for *"Scalable Transpilation for Overcoming Restricted
 Connectivity in Distributed Superconducting Quantum Architectures"* — Afonso
-Azenha, Ilia Polian, Sebastian Brandhofer (QCE26 submission). Full draft:
+Azenha, Ilia Polian, Sebastian Brandhofer (QCE26). Full draft:
 [`paper.pdf`](paper.pdf); one-page overview:
 [`poster-iqst.pdf`](poster-iqst.pdf).
-*arXiv/DOI link to follow.*
+
+**Citation:**
+A. Azenha, I. Polian, and S. Brandhofer, "Scalable Transpilation for
+Overcoming Restricted Connectivity in Distributed Superconducting Quantum
+Architectures," in *Proc. IEEE Int. Conf. Quantum Comput. Eng. (QCE)*,
+Toronto, ON, Canada, 2026. DOI/IEEE Xplore link to follow.
+
+> © 2026 IEEE. Personal use of this material is permitted. Permission from
+> IEEE must be obtained for all other uses, in any current or future media,
+> including reprinting/republishing this material for advertising or
+> promotional purposes, creating new collective works, for resale or
+> redistribution to servers or lists, or reuse of any copyrighted component of
+> this work in other works.
 
 Qubit mapping and routing for Distributed Quantum Computing (DQC) on near-term
 superconducting hardware, where inter-QPU links are scarce and roughly an

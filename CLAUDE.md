@@ -6,7 +6,7 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 
 Companion artifact for *"Scalable Transpilation for Overcoming Restricted
 Connectivity in Distributed Superconducting Quantum Architectures"* (Azenha,
-Polian & Brandhofer — QCE26 submission; full draft in
+Polian & Brandhofer — QCE26; full draft in
 `paper.pdf`). It ships small, self-contained patches against
 pinned upstream commits of two forked projects (Qiskit and pytket-dqc), so the
 changes under study can be reviewed in isolation without vendoring the full
